@@ -13,6 +13,7 @@
 
 using namespace MrHyDE;
 
+#include "solverManager_checkpointing.hpp"
 #include "solverManager_construct.hpp"
 #include "solverManager_models.hpp"
 #include "solverManager_setup.hpp"

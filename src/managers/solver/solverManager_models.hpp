@@ -105,6 +105,14 @@ void SolverManager<Node>::adjointModel(MrHyDE_OptVector & gradient) {
   
   Teuchos::TimeMonitor localtimer(*adjointtimer);
 
+  // Revolve checkpointing owns both the forward recomputation and the reverse
+  // sweep, so it replaces this whole routine rather than sitting inside it.
+  if (use_checkpointing && solver_type == "transient") {
+    this->checkpointedAdjointModel(gradient);
+    debugger->print("**** Finished SolverManager::adjointModel");
+    return;
+  }
+
   // Multiple physics sets are only supported by the fully explicit transient adjoint (explicitSplitAdjoint)
   // All ranks must take the same branch, so the rank only guards the warning
   bool multiset_ok = (fully_explicit && solver_type == "transient");
@@ -119,7 +127,7 @@ void SolverManager<Node>::adjointModel(MrHyDE_OptVector & gradient) {
 
     params->sacadoizeParams(false);
     linalg->startSweep(is_adjoint);
-    
+
     vector<vector_RCP> phi = setInitial();
     
     if (solver_type == "steady-state") {
