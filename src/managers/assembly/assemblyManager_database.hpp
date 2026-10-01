@@ -271,14 +271,16 @@ void AssemblyManager<Node>::identifyBoundaryDatabase(const size_t & block, vecto
   vector<vector<size_t> > all_orients;
   for (size_t grp=0; grp<boundary_groups[block].size(); ++grp) {
     vector<size_t> grp_orient(boundary_groups[block][grp]->numElem);
-    Kokkos::DynRankView<Intrepid2::Orientation,PHX::Device> orientation("tmp orients",boundary_groups[block][grp]->numElem);
-    disc->getPhysicalOrientations(groupData[block], boundary_groups[block][grp]->localElemID, orientation, true);
-    auto orient_host = create_mirror_view(orientation);
-    deep_copy(orient_host, orientation);
-    
-    //auto orient_host = create_mirror_view(boundary_groups[block][grp]->orientation);
-    //deep_copy(orient_host,boundary_groups[block][grp]->orientation);
-    
+    // Kokkos::DynRankView<Intrepid2::Orientation,PHX::Device> orientation("tmp orients",boundary_groups[block][grp]->numElem);
+    // disc->getPhysicalOrientations(groupData[block], boundary_groups[block][grp]->localElemID, orientation, true);
+    // auto orient_host = create_mirror_view(orientation);
+    // deep_copy(orient_host, orientation);
+
+    // Boundary group localElemIDs are process-local (not block-local), so use the
+    // orientations computed in the BoundaryGroup constructor
+    auto orient_host = create_mirror_view(boundary_groups[block][grp]->orientation);
+    deep_copy(orient_host,boundary_groups[block][grp]->orientation);
+
     for (size_t e=0; e<boundary_groups[block][grp]->numElem; ++e) {
       string orient = orient_host(e).to_string();
       bool found = false;
@@ -309,7 +311,7 @@ void AssemblyManager<Node>::identifyBoundaryDatabase(const size_t & block, vecto
     
     // Get the Jacobian for this group
     DRV jacobian("jacobian", boundary_groups[block][grp]->numElem, numip, dimension, dimension);
-    disc->getJacobian(groupData[block], boundary_groups[block][grp]->localElemID, jacobian);
+    disc->getJacobian(groupData[block], boundary_groups[block][grp]->nodes, jacobian);
     auto jacobian_host = create_mirror_view(jacobian);
     deep_copy(jacobian_host,jacobian);
     
@@ -1253,34 +1255,37 @@ void AssemblyManager<Node>::buildBoundaryDatabase(const size_t & block, vector<s
     
     Kokkos::View<LO*,AssemblyDevice> database_localID("tmp local elem id",1);
     database_localID(0) = boundary_groups[block][refgrp]->localElemID(refelem);
-    //DRV nodes = mesh->getMyNodes(block, boundary_groups[block][refgrp]->localElemID);
-    //DRV database_bnodes("nodes for the database", 1, nodes.extent(1), dimension);
-    //Kokkos::DynRankView<Intrepid2::Orientation,PHX::Device> database_borientation("database orientations", 1);
     
-    //auto database_bnodes_host = create_mirror_view(database_bnodes);
-    //auto database_borientation_host = create_mirror_view(database_borientation);
-    
+    // Boundary group localElemIDs are process-local (not block-local), so use the
+    // nodes and orientations stored on the BoundaryGroup rather than looking them up by ID
+    DRV nodes = boundary_groups[block][refgrp]->nodes;
+    DRV database_bnodes("nodes for the database", 1, nodes.extent(1), nodes.extent(2));
+    Kokkos::DynRankView<Intrepid2::Orientation,PHX::Device> database_borientation("database orientations", 1);
+
+    auto database_bnodes_host = create_mirror_view(database_bnodes);
+    auto database_borientation_host = create_mirror_view(database_borientation);
+
     LO localSideID = boundary_groups[block][refgrp]->localSideID;
     // Get the nodes on the host
-    //auto nodes_host = create_mirror_view(nodes);
-    //deep_copy(nodes_host, nodes);
-    
-    //for (size_type node=0; node<database_bnodes.extent(1); ++node) {
-    //  for (size_type dim=0; dim<database_bnodes.extent(2); ++dim) {
-    //    database_bnodes_host(0,node,dim) = nodes_host(refelem,node,dim);
-    //  }
-    //}
-    //deep_copy(database_bnodes, database_bnodes_host);
-    
+    auto nodes_host = create_mirror_view(nodes);
+    deep_copy(nodes_host, nodes);
+
+    for (size_type node=0; node<database_bnodes.extent(1); ++node) {
+      for (size_type dim=0; dim<database_bnodes.extent(2); ++dim) {
+        database_bnodes_host(0,node,dim) = nodes_host(refelem,node,dim);
+      }
+    }
+    deep_copy(database_bnodes, database_bnodes_host);
+
     // Get the orientations on the host
-    //auto orientations_host = create_mirror_view(boundary_groups[block][refgrp]->orientation);
-    //deep_copy(orientations_host, boundary_groups[block][refgrp]->orientation);
-    //database_borientation_host(0) = orientations_host(refelem);
-    //deep_copy(database_borientation, database_borientation_host);
-    
+    auto orientations_host = create_mirror_view(boundary_groups[block][refgrp]->orientation);
+    deep_copy(orientations_host, boundary_groups[block][refgrp]->orientation);
+    database_borientation_host(0) = orientations_host(refelem);
+    deep_copy(database_borientation, database_borientation_host);
+
     vector<View_Sc4> tbasis, tbasis_grad, tbasis_curl;
     vector<View_Sc3> tbasis_div;
-    disc->getPhysicalBoundaryBasis(groupData[block], database_localID, localSideID,
+    disc->getPhysicalBoundaryBasis(groupData[block], database_bnodes, localSideID, database_borientation,
                                    tbasis, tbasis_grad, tbasis_curl, tbasis_div);
     
     for (size_t i=0; i<groupData[block]->basis_pointers.size(); i++) {
