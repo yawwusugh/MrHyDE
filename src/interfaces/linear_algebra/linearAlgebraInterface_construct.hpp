@@ -317,7 +317,13 @@ void LinearAlgebraInterface<Node>::setupLinearAlgebra() {
     
     // Param/state LA objects
     // TMW: warning - this is hard coded to one physics set
-    for (size_t set=0; set<setnames.size(); ++set) {
+    // Not needed (and the overlapped state maps may be missing or emptied) in fully explicit
+    // matrix-free mode, which never assembles param/state Jacobians
+    bool allocate_paramstate = true;
+    if (settings->sublist("Solver").get<bool>("fully explicit",false) && settings->sublist("Solver").get<bool>("matrix free",false) ) {
+      allocate_paramstate = false;
+    }
+    for (size_t set=0; set<setnames.size() && allocate_paramstate; ++set) {
       vector<size_t> max_entriesPerRow(param_overlapped_map->getLocalNumElements(), 0);
       for (size_t b=0; b<blocknames.size(); b++) {
         auto EIDs = disc->my_elements[b];
