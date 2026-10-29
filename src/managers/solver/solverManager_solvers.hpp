@@ -712,6 +712,22 @@ int SolverManager<Node>::explicitSolver(const size_t & set, const size_t & stage
     linalg->exportVectorFromOverlapped(set, current_res, current_res_over);
   }
 
+  // The mass solve keeps fixed DOFs only if res is zero there. The scatter skips rows a rank
+  // flags as fixed, but a rank that ghosts a fixed DOF without owning its boundary side does not
+  // flag it, and its contribution is summed in by the export. Zero the owned fixed rows here.
+  {
+    typedef typename Node::execution_space LA_exec;
+    auto fixed = explicitFixedDOF[set];
+    auto res_view = current_res->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+    parallel_for("explicit solver mask res",
+                 RangePolicy<LA_exec>(0,res_view.extent(0)),
+                 MRHYDE_LAMBDA (const int k ) {
+      if (fixed(k)) {
+        res_view(k,0) = 0.0;
+      }
+    });
+  }
+
   Teuchos::Array<typename Teuchos::ScalarTraits<ScalarT>::magnitudeType> rnorm(1);
   current_res->norm2(rnorm);
   //KokkosTools::print(current_res);
@@ -985,11 +1001,22 @@ void SolverManager<Node>::matrixFreePCG(const size_t & set, vector_RCP & b, vect
   r->assign(*b);
   r->update(-one,*q,one);
   
+  // Fixed DOFs: zero r and M*p there, so the iteration only sees M_II and x keeps its fixed values
+  auto fixed = explicitFixedDOF[set];
+  auto r_view = r->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto q_view = q->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  parallel_for("PCG mask res",
+               RangePolicy<LA_exec>(0,r_view.extent(0)),
+               MRHYDE_LAMBDA (const int k ) {
+    if (fixed(k)) {
+      r_view(k,0) = 0.0;
+    }
+  });
+  
   r->norm2(rnorm);
   ScalarT r0 = rnorm[0];
   
   auto M_view = M->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-  auto r_view = r->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
   auto z_view = z->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
   
   while (iter<maxiter && rnorm[0]/r0>tol) {
@@ -1024,6 +1051,13 @@ void SolverManager<Node>::matrixFreePCG(const size_t & set, vector_RCP & b, vect
       if (linalg->getHaveOverlapped()) {
         linalg->exportVectorFromOverlapped(set, q, q_over);
       }
+      parallel_for("PCG mask Mp",
+                   RangePolicy<LA_exec>(0,q_view.extent(0)),
+                   MRHYDE_LAMBDA (const int k ) {
+        if (fixed(k)) {
+          q_view(k,0) = 0.0;
+        }
+      });
     }
     
     p->dot(*q,dotprod);

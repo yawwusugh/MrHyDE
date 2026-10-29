@@ -91,6 +91,11 @@ public:
   void setupExplicitMass();
   
   /**
+   * @brief Impose the fixed (Dirichlet) DOFs on the explicit mass solve.
+   */
+  void setupExplicitMassConstraints();
+  
+  /**
    * @brief Set up mass matrix actions for discretized parameters.
    */
   void setupDiscretizedParamMass();
@@ -391,6 +396,7 @@ public:
   vector<Teuchos::RCP<LA_MultiVector>> invdiagMass;   // Inverse diagonal mass matrices per set
   vector<Teuchos::RCP<LA_MultiVector>> diagMass;       // Diagonal mass matrices per set
   vector<matrix_RCP> explicitMass;                     // Explicit mass matrices
+  vector<Kokkos::View<bool*,LA_device> > explicitFixedDOF; // Fixed DOF flags on the owned map per set
   
   Teuchos::RCP<LA_MultiVector> diagParamMass; // Diagonal mass for parameters
   matrix_RCP paramMass;                      // Parameter mass matrix
