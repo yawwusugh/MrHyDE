@@ -1007,6 +1007,8 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
 
   // ---------------------------- checks ----------------------------
 
+  TEUCHOS_TEST_FOR_EXCEPTION(dimension != 3, std::runtime_error,
+                             "Error: the explicit adjoint requires a 3D mesh (the 2D maxwell residual is not scaled by 1/eps).");
   TEUCHOS_TEST_FOR_EXCEPTION(setnames.size() != 2, std::runtime_error,
                              "Error: the explicit adjoint requires exactly two physics sets (E, B).");
   {
