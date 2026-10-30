@@ -254,12 +254,20 @@ public:
   void explicitSplitAdjoint(MrHyDE_OptVector & gradient);
 
   /**
-   * @brief x = deltat*b(0)*M_set^{-1} rhs, with the same mass operator as explicitSolver.
+   * @brief x = deltat*b(0)*P M_set^{-1} P rhs, with the same mass operator as explicitSolver;
+   *        P zeroes the fixed (Dirichlet) DOFs.
    * @param[in] set Physics set index
    * @param[in,out] rhs Right-hand side (owned map; overwritten)
    * @param[out] x Result (owned map)
    */
   void applyExplicitMassInverse(const size_t & set, vector_RCP & rhs, vector_RCP & x);
+
+  /**
+   * @brief Zero the owned fixed (Dirichlet) DOFs of a set (flags from setupExplicitMassConstraints).
+   * @param[in] set Physics set index
+   * @param[in,out] vec Vector on the owned map of the set
+   */
+  void zeroExplicitFixedDOFs(const size_t & set, vector_RCP & vec);
 
   /**
    * @brief Linear part of the explicit residual of a set: res = r(x,y) - r(0,0), where

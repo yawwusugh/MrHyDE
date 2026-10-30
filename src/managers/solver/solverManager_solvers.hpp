@@ -840,7 +840,7 @@ int SolverManager<Node>::explicitSolver(const size_t & set, const size_t & stage
 }
 
 // ========================================================================================
-// x = deltat*b(0)*M_set^{-1} rhs, using the same mass operator as explicitSolver
+// x = deltat*b(0)*P M_set^{-1} P rhs, using the same mass operator and fixed DOFs as explicitSolver
 // ========================================================================================
 
 template<class Node>
@@ -851,6 +851,10 @@ void SolverManager<Node>::applyExplicitMassInverse(const size_t & set, vector_RC
 
   ScalarT wt = deltat*butcher_b[set](0);
   x->putScalar(0.0);
+
+  // explicitSolver zeroes the residual on fixed DOFs before its mass solve, so the update is
+  // dt P M^{-1} P r with P the projection onto the free DOFs; apply the same P here
+  this->zeroExplicitFixedDOFs(set, rhs);
 
   Teuchos::Array<typename Teuchos::ScalarTraits<ScalarT>::magnitudeType> rnorm(1);
   rhs->norm2(rnorm);
@@ -887,6 +891,26 @@ void SolverManager<Node>::applyExplicitMassInverse(const size_t & set, vector_RC
       x_view(k,0) = wt*rhs_view(k,0)/dm_view(k,0);
     });
   }
+}
+
+// ========================================================================================
+// vec = P vec: zero the owned fixed (Dirichlet) DOFs of a set, as explicitSolver does to its residual
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::zeroExplicitFixedDOFs(const size_t & set, vector_RCP & vec) {
+  TEUCHOS_TEST_FOR_EXCEPTION(set >= explicitFixedDOF.size(), std::runtime_error,
+                             "Error: no explicit fixed-DOF flags for physics set " + std::to_string(set) + ".");
+  typedef typename Node::execution_space LA_exec;
+  auto fixed = explicitFixedDOF[set];
+  auto vec_view = vec->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  parallel_for("explicit mask fixed DOFs",
+               RangePolicy<LA_exec>(0,vec_view.extent(0)),
+               MRHYDE_LAMBDA (const int k ) {
+    if (fixed(k)) {
+      vec_view(k,0) = 0.0;
+    }
+  });
 }
 
 // ========================================================================================
@@ -986,6 +1010,10 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
 //   E^{n+1} = E^n + dt M_E^{-1} r_E(E^n, B^n, p_n, t_n)
 //   B^{n+1} = B^n + dt M_B^{-1} r_B(E^{n+1})
 // with (3D maxwell) R_E = (1/eps)(S E + F p + g) - 1/(mu eps) K B and R_B = C E, C = K^T.
+// With strong Dirichlet conditions, dt M^{-1} stands for dt P M^{-1} P, P the projection onto the
+// free DOFs (explicitSolver zeroes the residual on fixed DOFs and the mass solve keeps them fixed).
+// This operator is symmetric, so the sweep below holds unchanged with applyExplicitMassInverse
+// applying P; mu_E vanishes on fixed DOFs. Dirichlet data do not depend on p, so they drop out.
 // Objective (integrated control, t=0 skipped):
 //   J = sum_{n=1}^N dt w int_obs 0.5 eps |E^n|^2 + 0.5/mu |B^n|^2.
 // Backward sweep, n = N,...,1, with Ebar^{N+1} = Bbar^{N+1} = mu_E^{N+1} = 0:
@@ -996,8 +1024,7 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
 //   dJ/dp_{n-1} = -(1/eps) F^T mu_E^n
 // r^lin is the residual with zero control and zero source (explicitLinearResidual, which evaluates it at
 // scaled arguments so the source does not swamp the tiny adjoint vectors).
-// Requires constant eps and mu, no strong Dirichlet or Neumann (ABC) conditions, and the
-// EM-energy objective.
+// Requires constant eps and mu, no Neumann (ABC) condition on B, and the EM-energy objective.
 // ========================================================================================
 
 template<class Node>
@@ -1025,8 +1052,6 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
     TEUCHOS_TEST_FOR_EXCEPTION(std::abs(butcher_A[set](0,0)) > 1.0e-14, std::runtime_error,
                                "Error: the explicit adjoint requires an explicit stage (Butcher A(0,0) = 0).");
   }
-  TEUCHOS_TEST_FOR_EXCEPTION(usestrongDBCs, std::runtime_error,
-                             "Error: the explicit adjoint does not support strong Dirichlet conditions.");
   TEUCHOS_TEST_FOR_EXCEPTION(postproc->is_incremental_adjoint, std::runtime_error,
                              "Error: incremental (second-order) adjoints are not implemented for the explicit split.");
   for (size_t block=0; block<assembler->wkset.size(); ++block) {
@@ -1124,8 +1149,11 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   //   objective:    <dJ/dE^n, E^n> + <dJ/dB^n, B^n> = 2 dt J_n  (J_n is quadratic)
   // and, after the sweep, a tangent test of the whole adjoint (see below).
   if (settings->sublist("Solver").get<bool>("explicit adjoint operator check",false)) {
+    // Random states are zero on fixed DOFs, like the forward states (rows of fixed DOFs are not
+    // assembled consistently, see explicitSolver)
     auto randOver = [&](const size_t & set, vector_RCP & owned, vector_RCP & over) {
       owned->randomize();
+      this->zeroExplicitFixedDOFs(set, owned);
       toOverlapped(set, over, owned);
     };
     auto dotp = [](vector_RCP & a, vector_RCP & b) {
