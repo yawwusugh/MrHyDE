@@ -105,16 +105,18 @@ void SolverManager<Node>::adjointModel(MrHyDE_OptVector & gradient) {
   
   Teuchos::TimeMonitor localtimer(*adjointtimer);
 
+  // Multiple physics sets are only supported by the fully explicit transient adjoint (explicitSplitAdjoint)
   // All ranks must take the same branch, so the rank only guards the warning
-  if (setnames.size()>1) {
+  bool multiset_ok = (fully_explicit && solver_type == "transient");
+  if (setnames.size()>1 && !multiset_ok) {
     if (Comm->getRank() == 0) {
       cout << "MrHyDE WARNING: Adjoints are not yet implemented for multiple physics sets." << endl;
     }
   }
   else {
-    
+
     is_adjoint = true;
-    
+
     params->sacadoizeParams(false);
     linalg->startSweep(is_adjoint);
     

@@ -188,8 +188,13 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
       postproc->writeSolution(sol, current_time);
     }
   }
+  else if (fully_explicit) { // adjoint of the fully explicit E/B split (no AD)
+    current_time = final_time;
+    is_final_time = true;
+    this->explicitSplitAdjoint(gradient);
+  }
   else { // adjoint solve - fixed time stepping based on forward solve
-  
+
     current_time = final_time;
     is_final_time = true;
     
@@ -965,6 +970,200 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
   evalRes(xs, ys, ps, res);
   evalRes(zero0, zero1, pzero, res0);
   res->update(-1.0/scale, *res0, 1.0/scale);
+}
+
+// ========================================================================================
+// AD-free discrete adjoint of the fully explicit E/B split
+//
+// Forward (E = set 0, B = set 1, one FWE stage each, r = -R from assembleRes):
+//   E^{n+1} = E^n + dt M_E^{-1} r_E(E^n, B^n, p_n, t_n)
+//   B^{n+1} = B^n + dt M_B^{-1} r_B(E^{n+1})
+// with (3D maxwell) R_E = (1/eps)(S E + F p + g) - 1/(mu eps) K B and R_B = C E, C = K^T.
+// Objective (integrated control, t=0 skipped):
+//   J = sum_{n=1}^N dt w int_obs 0.5 eps |E^n|^2 + 0.5/mu |B^n|^2.
+// Backward sweep, n = N,...,1, with Ebar^{N+1} = Bbar^{N+1} = mu_E^{N+1} = 0:
+//   Bbar^n  = dJ/dB^n + Bbar^{n+1} - 1/(mu eps) r_B(mu_E^{n+1})          [= ... + 1/(mu eps) K^T mu_E]
+//   mu_B^n  = dt M_B^{-1} Bbar^n
+//   Ebar^n  = dJ/dE^n + Ebar^{n+1} + r_E^lin(mu_E^{n+1}, -mu eps mu_B^n)  [= ... - (1/eps) S mu_E - C^T mu_B]
+//   mu_E^n  = dt M_E^{-1} Ebar^n
+//   dJ/dp_{n-1} = -(1/eps) F^T mu_E^n
+// r^lin is the residual with zero control and zero source (explicitLinearResidual, which evaluates it at
+// scaled arguments so the source does not swamp the tiny adjoint vectors).
+// Requires constant eps and mu, no strong Dirichlet or Neumann (ABC) conditions, and the
+// EM-energy objective.
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
+
+  debugger->print(1, "******** Starting SolverManager::explicitSplitAdjoint ...");
+
+  // ---------------------------- checks ----------------------------
+
+  TEUCHOS_TEST_FOR_EXCEPTION(setnames.size() != 2, std::runtime_error,
+                             "Error: the explicit adjoint requires exactly two physics sets (E, B).");
+  {
+    auto & vlist = assembler->wkset[0]->set_varlist;
+    bool varsok = (vlist[0].size() == 1 && vlist[0][0] == "E" && vlist[1].size() == 1 && vlist[1][0] == "B");
+    TEUCHOS_TEST_FOR_EXCEPTION(!varsok, std::runtime_error,
+                               "Error: the explicit adjoint requires set 0 = {E} and set 1 = {B}.");
+  }
+  for (size_t set=0; set<setnames.size(); ++set) {
+    TEUCHOS_TEST_FOR_EXCEPTION(numstages[set] != 1 || maxnumstages[set] != 1, std::runtime_error,
+                               "Error: the explicit adjoint requires a single-stage scheme (FWE) in each set.");
+    TEUCHOS_TEST_FOR_EXCEPTION(BDForder[set] != 1, std::runtime_error,
+                               "Error: the explicit adjoint requires 'transient BDF order: 1'.");
+    TEUCHOS_TEST_FOR_EXCEPTION(std::abs(butcher_A[set](0,0)) > 1.0e-14, std::runtime_error,
+                               "Error: the explicit adjoint requires an explicit stage (Butcher A(0,0) = 0).");
+  }
+  TEUCHOS_TEST_FOR_EXCEPTION(usestrongDBCs, std::runtime_error,
+                             "Error: the explicit adjoint does not support strong Dirichlet conditions.");
+  TEUCHOS_TEST_FOR_EXCEPTION(postproc->is_incremental_adjoint, std::runtime_error,
+                             "Error: incremental (second-order) adjoints are not implemented for the explicit split.");
+  for (size_t block=0; block<assembler->wkset.size(); ++block) {
+    auto bcs = assembler->wkset[block]->set_var_bcs[1];
+    for (size_type i=0; i<bcs.extent(0); ++i) {
+      for (size_type j=0; j<bcs.extent(1); ++j) {
+        TEUCHOS_TEST_FOR_EXCEPTION(bcs(i,j) == "Neumann", std::runtime_error,
+                                   "Error: the explicit adjoint does not support Neumann (ABC) conditions on B.");
+      }
+    }
+  }
+
+  // eps and mu must be the same numeric constant in every block (C = K^T up to 1/(mu eps))
+  auto blockConstant = [&](const string & name) {
+    ScalarT val = 0.0;
+    for (size_t block=0; block<blocknames.size(); ++block) {
+      Teuchos::ParameterList & funcs = settings->sublist("Functions");
+      Teuchos::ParameterList fs = funcs.isSublist(blocknames[block]) ? funcs.sublist(blocknames[block]) : funcs;
+      string sval = fs.get<string>(name,"1.0");
+      ScalarT bval = 0.0;
+      size_t pos = 0;
+      try {
+        bval = std::stod(sval, &pos);
+      }
+      catch (...) {
+        pos = 0;
+      }
+      TEUCHOS_TEST_FOR_EXCEPTION(pos == 0 || sval.find_first_not_of(" ", pos) != string::npos, std::runtime_error,
+                                 "Error: the explicit adjoint requires '" + name + "' to be a numeric constant, got '" + sval + "' on " + blocknames[block]);
+      if (block == 0) {
+        val = bval;
+      }
+      TEUCHOS_TEST_FOR_EXCEPTION(std::abs(bval-val) > 1.0e-12*std::abs(val), std::runtime_error,
+                                 "Error: the explicit adjoint requires '" + name + "' to be the same in every block.");
+    }
+    return val;
+  };
+  ScalarT eps = blockConstant("permittivity");
+  ScalarT mu = blockConstant("permeability");
+
+  auto & soln_source = postproc->soln;
+  int store_index = 0;
+  size_t numFwdSteps = soln_source[0]->getTotalTimes(store_index)-1;
+  TEUCHOS_TEST_FOR_EXCEPTION(soln_source[1]->getTotalTimes(store_index)-1 != numFwdSteps, std::runtime_error,
+                             "Error: the explicit adjoint requires the forward solution of both sets at every time step.");
+  for (size_t n=1; n<=numFwdSteps; ++n) {
+    ScalarT dtn = soln_source[0]->getSpecificTime(store_index, n) - soln_source[0]->getSpecificTime(store_index, n-1);
+    TEUCHOS_TEST_FOR_EXCEPTION(std::abs(dtn-deltat) > 1.0e-8*deltat, std::runtime_error,
+                               "Error: the explicit adjoint requires a fixed time step (no time step cuts).");
+  }
+
+  // ---------------------------- helpers ----------------------------
+
+  bool have_over = linalg->getHaveOverlapped();
+  auto toOverlapped = [&](const size_t & set, vector_RCP & over, vector_RCP & owned) {
+    if (have_over) {
+      linalg->importVectorToOverlapped(set, over, owned);
+    }
+    else {
+      over->assign(*owned);
+    }
+  };
+  auto extractState = [&](const size_t & set, vector_RCP & vec, const size_t & index) {
+    bool fnd = soln_source[set]->extract(vec, index);
+    TEUCHOS_TEST_FOR_EXCEPTION(!fnd, std::runtime_error, "Error: MrHyDE was not able to find the forward solution for the explicit adjoint");
+  };
+
+  // Forward states (overlapped), adjoint vectors (owned) and mass-scaled adjoints (overlapped)
+  vector_RCP E_n = linalg->getNewOverlappedVector(0), B_n = linalg->getNewOverlappedVector(1);
+  vector_RCP Ebar = linalg->getNewVector(0), Ebar_next = linalg->getNewVector(0);
+  vector_RCP Bbar = linalg->getNewVector(1), Bbar_next = linalg->getNewVector(1);
+  vector_RCP muE = linalg->getNewVector(0), muB = linalg->getNewVector(1);
+  vector_RCP muE_over = linalg->getNewOverlappedVector(0), muE_next_over = linalg->getNewOverlappedVector(0);
+  vector_RCP muB_over = linalg->getNewOverlappedVector(1), zero_B_over = linalg->getNewOverlappedVector(1);
+  vector_RCP rhsE = linalg->getNewVector(0), rhsB = linalg->getNewVector(1);
+  vector_RCP resE = linalg->getNewVector(0), resB = linalg->getNewVector(1);
+  vector_RCP sens;
+  if (params->num_discretized_params > 0) {
+    sens = linalg->getNewParamVector();
+  }
+  Ebar_next->putScalar(0.0);
+  Bbar_next->putScalar(0.0);
+  muE_next_over->putScalar(0.0);
+  zero_B_over->putScalar(0.0);
+
+  // ---------------------------- backward sweep ----------------------------
+
+  for (size_t timeiter=0; timeiter<numFwdSteps; ++timeiter) {
+
+    size_t n = numFwdSteps-timeiter;
+
+    if (Comm->getRank() == 0 && verbosity > 0) {
+      cout << endl << endl << "*******************************************************" << endl;
+      cout << endl << "**** Beginning Explicit Split Adjoint Time Step " << timeiter << " (forward state " << n << ")" << endl;
+      cout << "*******************************************************" << endl << endl << endl;
+    }
+
+    extractState(0, E_n, n);
+    extractState(1, B_n, n);
+
+    // The linear residual parts do not depend on time; t_n is the time of the forward step n -> n+1
+    current_time = soln_source[0]->getSpecificTime(store_index, n);
+    postproc->setTimeIndex(n);
+    assembler->updateStage(0, current_time, deltat);
+
+    // Bbar^n = dJ/dB^n + Bbar^{n+1} - 1/(mu eps) r_B(mu_E^{n+1})
+    Bbar->putScalar(0.0);
+    postproc->addEnergyObjectiveGradState(1, B_n, deltat/mu, Bbar);
+    Bbar->update(1.0, *Bbar_next, 1.0);
+    this->explicitLinearResidual(1, muE_next_over, zero_B_over, resB);
+    Bbar->update(-1.0/(mu*eps), *resB, 1.0);
+
+    // mu_B^n = dt M_B^{-1} Bbar^n
+    rhsB->assign(*Bbar);
+    this->applyExplicitMassInverse(1, rhsB, muB);
+    toOverlapped(1, muB_over, muB);
+
+    // Ebar^n = dJ/dE^n + Ebar^{n+1} + r_E^lin(mu_E^{n+1}, -mu eps mu_B^n)
+    Ebar->putScalar(0.0);
+    postproc->addEnergyObjectiveGradState(0, E_n, deltat*eps, Ebar);
+    Ebar->update(1.0, *Ebar_next, 1.0);
+    muB_over->scale(-mu*eps);
+    this->explicitLinearResidual(0, muE_next_over, muB_over, resE);
+    Ebar->update(1.0, *resE, 1.0);
+
+    // mu_E^n = dt M_E^{-1} Ebar^n
+    rhsE->assign(*Ebar);
+    this->applyExplicitMassInverse(0, rhsE, muE);
+    toOverlapped(0, muE_over, muE);
+
+    // dJ/dp_{n-1} = -(1/eps) F^T mu_E^n
+    if (params->num_discretized_params > 0) {
+      postproc->computeControlTranspose(muE_over, -1.0/eps, sens);
+      auto disc_grad = gradient.getField();
+      vector_RCP curr_grad = gradient.haveDynamicField() ? disc_grad[n-1]->getVector() : disc_grad[0]->getVector();
+      curr_grad->update(1.0, *sens, 1.0);
+    }
+
+    std::swap(Ebar, Ebar_next);
+    std::swap(Bbar, Bbar_next);
+    std::swap(muE_over, muE_next_over);
+
+    is_final_time = false;
+  }
+
+  debugger->print(1, "******** Finished SolverManager::explicitSplitAdjoint");
 }
 
 // ========================================================================================

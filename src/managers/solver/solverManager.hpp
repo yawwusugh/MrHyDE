@@ -246,6 +246,14 @@ public:
                      vector<vector_RCP> & phi_prev );
 
   /**
+   * @brief AD-free discrete adjoint of the fully explicit E/B split (FWE in each set).
+   *        Transposed operators are applied with forward residual calls (see the comment
+   *        above the implementation for the recurrences and assumptions).
+   * @param[out] gradient Gradient with respect to the dynamic discretized control (summed into)
+   */
+  void explicitSplitAdjoint(MrHyDE_OptVector & gradient);
+
+  /**
    * @brief x = deltat*b(0)*M_set^{-1} rhs, with the same mass operator as explicitSolver.
    * @param[in] set Physics set index
    * @param[in,out] rhs Right-hand side (owned map; overwritten)
