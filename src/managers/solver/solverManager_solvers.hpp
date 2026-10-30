@@ -1025,6 +1025,12 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
 // r^lin is the residual with zero control and zero source (explicitLinearResidual, which evaluates it at
 // scaled arguments so the source does not swamp the tiny adjoint vectors).
 // Requires constant eps and mu, no Neumann (ABC) condition on B, and the EM-energy objective.
+//
+// Hessian-vector products (incrementalAdjointModel): the scheme is affine in (E, B, p) and J is a
+// homogeneous quadratic in (E, B), so H v = -(1/eps) F^T mu_E with the same sweep driven by
+// dJ/du at the tangent states w = (dE, dB) instead of the forward states. incrementalForwardModel
+// computes w with the explicit forward itself (control v, physical source gated off by src_gate)
+// and stores it in incr_soln. Its strong Dirichlet data come from the deck, so they must be zero.
 // ========================================================================================
 
 template<class Node>
@@ -1052,8 +1058,6 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
     TEUCHOS_TEST_FOR_EXCEPTION(std::abs(butcher_A[set](0,0)) > 1.0e-14, std::runtime_error,
                                "Error: the explicit adjoint requires an explicit stage (Butcher A(0,0) = 0).");
   }
-  TEUCHOS_TEST_FOR_EXCEPTION(postproc->is_incremental_adjoint, std::runtime_error,
-                             "Error: incremental (second-order) adjoints are not implemented for the explicit split.");
   for (size_t block=0; block<assembler->wkset.size(); ++block) {
     auto bcs = assembler->wkset[block]->set_var_bcs[1];
     for (size_type i=0; i<bcs.extent(0); ++i) {
@@ -1092,7 +1096,9 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   ScalarT eps = blockConstant("permittivity");
   ScalarT mu = blockConstant("permeability");
 
-  auto & soln_source = postproc->soln;
+  // Second-order adjoint: the sweep runs on the tangent states
+  bool incremental = postproc->is_incremental_adjoint;
+  auto & soln_source = incremental ? postproc->incr_soln : postproc->soln;
   int store_index = 0;
   size_t numFwdSteps = soln_source[0]->getTotalTimes(store_index)-1;
   TEUCHOS_TEST_FOR_EXCEPTION(soln_source[1]->getTotalTimes(store_index)-1 != numFwdSteps, std::runtime_error,
@@ -1137,7 +1143,8 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   muE_next_over->putScalar(0.0);
   zero_B_over->putScalar(0.0);
 
-  // Optional checks ('explicit adjoint operator check: true' in Solver) of what the sweep relies on.
+  // Optional checks ('explicit adjoint operator check: true' in Solver) of what the sweep relies on,
+  // run with the gradient only (the forward states and objective values belong to the first-order sweep).
   // With random vectors x, y, d (and a, b in either set):
   //   C = K^T:      -<r_B(x), y> = mu eps <x, r_E^lin(0, y)>
   //   S symmetric:  <r_E^lin(x1, 0), x2> = <x1, r_E^lin(x2, 0)>
@@ -1148,7 +1155,7 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   //   forward step: E^{n+1} - E^n = dt M_E^{-1} r_E(E^n, B^n; p_n),  B^{n+1} - B^n = dt M_B^{-1} r_B(E^{n+1})
   //   objective:    <dJ/dE^n, E^n> + <dJ/dB^n, B^n> = 2 dt J_n  (J_n is quadratic)
   // and, after the sweep, a tangent test of the whole adjoint (see below).
-  if (settings->sublist("Solver").get<bool>("explicit adjoint operator check",false)) {
+  if (!incremental && settings->sublist("Solver").get<bool>("explicit adjoint operator check",false)) {
     // Random states are zero on fixed DOFs, like the forward states (rows of fixed DOFs are not
     // assembled consistently, see explicitSolver)
     auto randOver = [&](const size_t & set, vector_RCP & owned, vector_RCP & over) {
@@ -1377,7 +1384,7 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   // Optional tangent test of the whole sweep: for random dp_k, propagate the linearized forward
   //   dE^{n+1} = dE^n + dt M_E^{-1} (r_E^lin(dE^n, dB^n) + r_E^lin(0, 0; dp_n)),  dB^{n+1} = dB^n + dt M_B^{-1} r_B(dE^{n+1})
   // and compare dJ = sum_n <dJ/dE^n, dE^n> + <dJ/dB^n, dB^n> with sum_k <g_k, dp_k>
-  if (settings->sublist("Solver").get<bool>("explicit adjoint operator check",false) && params->num_discretized_params > 0) {
+  if (!incremental && settings->sublist("Solver").get<bool>("explicit adjoint operator check",false) && params->num_discretized_params > 0) {
     auto dotp = [](vector_RCP & a, vector_RCP & b) {
       Teuchos::Array<ScalarT> d(1);
       a->dot(*b, d);
