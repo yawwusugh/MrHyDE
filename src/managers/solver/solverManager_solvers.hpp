@@ -1103,6 +1103,180 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   muE_next_over->putScalar(0.0);
   zero_B_over->putScalar(0.0);
 
+  // Optional checks ('explicit adjoint operator check: true' in Solver) of what the sweep relies on.
+  // With random vectors x, y, d (and a, b in either set):
+  //   C = K^T:      -<r_B(x), y> = mu eps <x, r_E^lin(0, y)>
+  //   S symmetric:  <r_E^lin(x1, 0), x2> = <x1, r_E^lin(x2, 0)>
+  //   F^T:          <-(1/eps) F^T x, d> = <x, r_E^lin(0, 0; d)>
+  //   M symmetric:  <dt M^{-1} a, b> = <a, dt M^{-1} b>
+  //   CFL:          dt^2 lambda_max(M_E^{-1} K M_B^{-1} C)/(mu eps) <= 4 (symplectic Euler stability)
+  // With the stored forward states at n = N/2:
+  //   forward step: E^{n+1} - E^n = dt M_E^{-1} r_E(E^n, B^n; p_n),  B^{n+1} - B^n = dt M_B^{-1} r_B(E^{n+1})
+  //   objective:    <dJ/dE^n, E^n> + <dJ/dB^n, B^n> = 2 dt J_n  (J_n is quadratic)
+  // and, after the sweep, a tangent test of the whole adjoint (see below).
+  if (settings->sublist("Solver").get<bool>("explicit adjoint operator check",false)) {
+    auto randOver = [&](const size_t & set, vector_RCP & owned, vector_RCP & over) {
+      owned->randomize();
+      toOverlapped(set, over, owned);
+    };
+    auto dotp = [](vector_RCP & a, vector_RCP & b) {
+      Teuchos::Array<ScalarT> d(1);
+      a->dot(*b, d);
+      return d[0];
+    };
+    vector_RCP x1 = linalg->getNewVector(0), x2 = linalg->getNewVector(0), y1 = linalg->getNewVector(1), y2 = linalg->getNewVector(1);
+    vector_RCP x1o = linalg->getNewOverlappedVector(0), x2o = linalg->getNewOverlappedVector(0);
+    vector_RCP y1o = linalg->getNewOverlappedVector(1), zero_E_over = linalg->getNewOverlappedVector(0);
+    zero_E_over->putScalar(0.0);
+    randOver(0, x1, x1o);
+    randOver(0, x2, x2o);
+    randOver(1, y1, y1o);
+    y2->randomize();
+    current_time = soln_source[0]->getSpecificTime(store_index, 0);
+    assembler->updateStage(0, current_time, deltat);
+
+    this->explicitLinearResidual(1, x1o, zero_B_over, resB);
+    ScalarT lhsC = -dotp(resB, y1);
+    this->explicitLinearResidual(0, zero_E_over, y1o, resE);
+    ScalarT rhsC = mu*eps*dotp(x1, resE);
+
+    this->explicitLinearResidual(0, x1o, zero_B_over, resE);
+    ScalarT lhsS = dotp(resE, x2);
+    this->explicitLinearResidual(0, x2o, zero_B_over, resE);
+    ScalarT rhsS = dotp(x1, resE);
+
+    ScalarT lhsF = 0.0, rhsF = 0.0;
+    if (params->num_discretized_params > 0) {
+      vector_RCP d = linalg->getNewParamVector(), d_over = linalg->getNewOverlappedParamVector();
+      d->randomize();
+      d_over->putScalar(0.0);
+      d_over->doImport(*d, *(linalg->param_importer), Tpetra::INSERT);
+      vector_RCP s = linalg->getNewParamVector();
+      postproc->computeControlTranspose(x1o, -1.0/eps, s);
+      lhsF = dotp(s, d);
+      this->explicitLinearResidual(0, zero_E_over, zero_B_over, resE, true, d_over);
+      rhsF = dotp(x1, resE);
+    }
+    
+    // CFL: power iteration on x <- -A_E r_E^lin(0, A_B r_B(x)) = dt^2/(mu eps) M_E^{-1} K M_B^{-1} C x
+    ScalarT lam = 0.0;
+    {
+      vector_RCP x = linalg->getNewVector(0), xo = linalg->getNewOverlappedVector(0);
+      vector_RCP y = linalg->getNewVector(1), yo = linalg->getNewOverlappedVector(1), z = linalg->getNewVector(0);
+      randOver(0, x, xo);
+      for (int it=0; it<300; ++it) {
+        Teuchos::Array<ScalarT> nx(1), nz(1);
+        x->norm2(nx);
+        this->explicitLinearResidual(1, xo, zero_B_over, resB);
+        this->applyExplicitMassInverse(1, resB, y);
+        toOverlapped(1, yo, y);
+        this->explicitLinearResidual(0, zero_E_over, yo, resE);
+        this->applyExplicitMassInverse(0, resE, z);
+        z->scale(-1.0);
+        z->norm2(nz);
+        lam = nz[0]/nx[0];
+        x->assign(*z);
+        x->scale(1.0/nz[0]);
+        toOverlapped(0, xo, x);
+      }
+    }
+
+    vector<ScalarT> lhsM(2), rhsM(2);
+    for (size_t set=0; set<2; ++set) {
+      vector_RCP a = (set == 0) ? x1 : y1, b = (set == 0) ? x2 : y2;
+      vector_RCP r = linalg->getNewVector(set), xa = linalg->getNewVector(set), xb = linalg->getNewVector(set);
+      r->assign(*a);
+      this->applyExplicitMassInverse(set, r, xa);
+      r->assign(*b);
+      this->applyExplicitMassInverse(set, r, xb);
+      lhsM[set] = dotp(xa, b);
+      rhsM[set] = dotp(a, xb);
+    }
+    // Forward step and objective at n = N/2
+    ScalarT stepErr[2] = {0.0, 0.0}, stepNorm[2] = {0.0, 0.0}, objCheck[2] = {0.0, 0.0};
+    {
+      size_t n = numFwdSteps/2;
+      vector_RCP En = linalg->getNewOverlappedVector(0), Bn = linalg->getNewOverlappedVector(1);
+      vector_RCP Enp = linalg->getNewOverlappedVector(0), Bnp = linalg->getNewOverlappedVector(1);
+      extractState(0, En, n);
+      extractState(1, Bn, n);
+      extractState(0, Enp, n+1);
+      extractState(1, Bnp, n+1);
+      current_time = soln_source[0]->getSpecificTime(store_index, n);
+      assembler->updateStage(0, current_time, deltat);
+      {
+        vector_RCP gE = linalg->getNewVector(0), gB = linalg->getNewVector(1);
+        vector_RCP Eo = linalg->getNewVector(0), Bo = linalg->getNewVector(1);
+        gE->putScalar(0.0);
+        gB->putScalar(0.0);
+        postproc->addEnergyObjectiveGradState(0, En, deltat*eps, gE);
+        postproc->addEnergyObjectiveGradState(1, Bn, deltat/mu, gB);
+        if (have_over) {
+          linalg->exportVectorFromOverlappedReplace(0, Eo, En);
+          linalg->exportVectorFromOverlappedReplace(1, Bo, Bn);
+        }
+        else {
+          Eo->assign(*En);
+          Bo->assign(*Bn);
+        }
+        objCheck[0] = dotp(gE, Eo) + dotp(gB, Bo);
+        ScalarT lval = 0.0, gval = 0.0;
+        for (size_t r=0; r<postproc->objectives.size(); ++r) {
+          if (postproc->objectives[r].objective_values.size() > n) {
+            lval += postproc->objectives[r].objective_values[n];
+          }
+        }
+        Teuchos::reduceAll(*Comm, Teuchos::REDUCE_SUM, 1, &lval, &gval);
+        objCheck[1] = 2.0*deltat*gval;
+      }
+      for (size_t set=0; set<2; ++set) {
+        vector_RCP r = linalg->getNewVector(set), du = linalg->getNewVector(set);
+        vector_RCP diff = linalg->getNewVector(set), tmp = linalg->getNewVector(set);
+        if (set == 0) {
+          params->updateDynamicParams(n);
+          vector_RCP p_n;
+          if (params->num_discretized_params > 0) {
+            p_n = params->getDiscretizedParamsOver();
+          }
+          this->explicitLinearResidual(0, En, Bn, r, false, p_n);
+        }
+        else {
+          this->explicitLinearResidual(1, Enp, zero_B_over, r, false);
+        }
+        this->applyExplicitMassInverse(set, r, du);
+        vector_RCP a = (set == 0) ? Enp : Bnp, b = (set == 0) ? En : Bn;
+        if (have_over) {
+          linalg->exportVectorFromOverlappedReplace(set, diff, a);
+          linalg->exportVectorFromOverlappedReplace(set, tmp, b);
+        }
+        else {
+          diff->assign(*a);
+          tmp->assign(*b);
+        }
+        diff->update(-1.0, *tmp, 1.0);
+        Teuchos::Array<ScalarT> nrm(1);
+        diff->norm2(nrm);
+        stepNorm[set] = nrm[0];
+        diff->update(-1.0, *du, 1.0);
+        diff->norm2(nrm);
+        stepErr[set] = nrm[0];
+      }
+    }
+    if (Comm->getRank() == 0) {
+      auto rel = [](ScalarT a, ScalarT b) { return std::abs(a-b)/std::max(std::abs(a)+std::abs(b), 1.0e-300); };
+      cout.precision(10);
+      cout << endl << "[EXPLICIT-ADJOINT-CHECK] forward E step : |dE - dt M^-1 r_E| = " << stepErr[0] << "  |dE| = " << stepNorm[0] << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] forward B step : |dB - dt M^-1 r_B| = " << stepErr[1] << "  |dB| = " << stepNorm[1] << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] objective grad : " << objCheck[0] << "  " << objCheck[1] << "  rel diff " << rel(objCheck[0],objCheck[1]) << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] CFL number     : " << lam << "  (stable iff <= 4)" << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] C = K^T      : " << lhsC << "  " << rhsC << "  rel diff " << rel(lhsC,rhsC) << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] S symmetric  : " << lhsS << "  " << rhsS << "  rel diff " << rel(lhsS,rhsS) << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] F^T          : " << lhsF << "  " << rhsF << "  rel diff " << rel(lhsF,rhsF) << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] M_E^-1 symm. : " << lhsM[0] << "  " << rhsM[0] << "  rel diff " << rel(lhsM[0],rhsM[0]) << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] M_B^-1 symm. : " << lhsM[1] << "  " << rhsM[1] << "  rel diff " << rel(lhsM[1],rhsM[1]) << endl << endl;
+    }
+  }
+
   // ---------------------------- backward sweep ----------------------------
 
   for (size_t timeiter=0; timeiter<numFwdSteps; ++timeiter) {
@@ -1161,6 +1335,68 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
     std::swap(muE_over, muE_next_over);
 
     is_final_time = false;
+  }
+
+  // Optional tangent test of the whole sweep: for random dp_k, propagate the linearized forward
+  //   dE^{n+1} = dE^n + dt M_E^{-1} (r_E^lin(dE^n, dB^n) + r_E^lin(0, 0; dp_n)),  dB^{n+1} = dB^n + dt M_B^{-1} r_B(dE^{n+1})
+  // and compare dJ = sum_n <dJ/dE^n, dE^n> + <dJ/dB^n, dB^n> with sum_k <g_k, dp_k>
+  if (settings->sublist("Solver").get<bool>("explicit adjoint operator check",false) && params->num_discretized_params > 0) {
+    auto dotp = [](vector_RCP & a, vector_RCP & b) {
+      Teuchos::Array<ScalarT> d(1);
+      a->dot(*b, d);
+      return d[0];
+    };
+    auto disc_grad = gradient.getField();
+    vector_RCP dE = linalg->getNewVector(0), dB = linalg->getNewVector(1);
+    vector_RCP dE_over = linalg->getNewOverlappedVector(0), dB_over = linalg->getNewOverlappedVector(1);
+    vector_RCP zero_E_over = linalg->getNewOverlappedVector(0);
+    vector_RCP du = linalg->getNewVector(0), dub = linalg->getNewVector(1), tmpE = linalg->getNewVector(0);
+    vector_RCP gE = linalg->getNewVector(0), gB = linalg->getNewVector(1);
+    vector_RCP dp = linalg->getNewParamVector(), dp_over = linalg->getNewOverlappedParamVector();
+    dE->putScalar(0.0);
+    dB->putScalar(0.0);
+    dE_over->putScalar(0.0);
+    dB_over->putScalar(0.0);
+    zero_E_over->putScalar(0.0);
+    ScalarT dJ = 0.0, gdp = 0.0, dJabs = 0.0, gdpabs = 0.0;
+    for (size_t n=0; n<numFwdSteps; ++n) {
+      dp->randomize();
+      dp_over->putScalar(0.0);
+      dp_over->doImport(*dp, *(linalg->param_importer), Tpetra::INSERT);
+      vector_RCP gk = gradient.haveDynamicField() ? disc_grad[n]->getVector() : disc_grad[0]->getVector();
+      ScalarT gterm = dotp(gk, dp);
+      gdp += gterm;
+      gdpabs += std::abs(gterm);
+
+      current_time = soln_source[0]->getSpecificTime(store_index, n);
+      assembler->updateStage(0, current_time, deltat);
+      this->explicitLinearResidual(0, dE_over, dB_over, resE);
+      this->explicitLinearResidual(0, zero_E_over, zero_B_over, tmpE, true, dp_over);
+      resE->update(1.0, *tmpE, 1.0);
+      this->applyExplicitMassInverse(0, resE, du);
+      dE->update(1.0, *du, 1.0);
+      toOverlapped(0, dE_over, dE);
+      this->explicitLinearResidual(1, dE_over, zero_B_over, resB);
+      this->applyExplicitMassInverse(1, resB, dub);
+      dB->update(1.0, *dub, 1.0);
+      toOverlapped(1, dB_over, dB);
+
+      extractState(0, E_n, n+1);
+      extractState(1, B_n, n+1);
+      gE->putScalar(0.0);
+      gB->putScalar(0.0);
+      postproc->addEnergyObjectiveGradState(0, E_n, deltat*eps, gE);
+      postproc->addEnergyObjectiveGradState(1, B_n, deltat/mu, gB);
+      ScalarT jterm = dotp(gE, dE) + dotp(gB, dB);
+      dJ += jterm;
+      dJabs += std::abs(jterm);
+    }
+    if (Comm->getRank() == 0) {
+      cout.precision(10);
+      cout << endl << "[EXPLICIT-ADJOINT-CHECK] tangent test: dJ = " << dJ << "  sum_k <g_k,dp_k> = " << gdp
+           << "  rel diff " << std::abs(dJ-gdp)/std::max(std::abs(dJ)+std::abs(gdp),1.0e-300)
+           << "  (sum|terms|: " << dJabs << ", " << gdpabs << ")" << endl << endl;
+    }
   }
 
   debugger->print(1, "******** Finished SolverManager::explicitSplitAdjoint");
