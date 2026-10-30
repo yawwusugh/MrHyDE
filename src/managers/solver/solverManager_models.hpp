@@ -104,9 +104,12 @@ void SolverManager<Node>::adjointModel(MrHyDE_OptVector & gradient) {
   debugger->print("**** Starting SolverManager::adjointModel ...");
   
   Teuchos::TimeMonitor localtimer(*adjointtimer);
-  
-  if (setnames.size()>1 && Comm->getRank() == 0) {
-    cout << "MrHyDE WARNING: Adjoints are not yet implemented for multiple physics sets." << endl;
+
+  // All ranks must take the same branch, so the rank only guards the warning
+  if (setnames.size()>1) {
+    if (Comm->getRank() == 0) {
+      cout << "MrHyDE WARNING: Adjoints are not yet implemented for multiple physics sets." << endl;
+    }
   }
   else {
     
@@ -216,8 +219,11 @@ void SolverManager<Node>::incrementalAdjointModel(MrHyDE_OptVector & hessvec) {
 
   Teuchos::TimeMonitor localtimer(*adjointtimer);
 
-  if (setnames.size()>1 && Comm->getRank() == 0) {
-    cout << "MrHyDE WARNING: Adjoints are not yet implemented for multiple physics sets." << endl;
+  // All ranks must take the same branch, so the rank only guards the warning
+  if (setnames.size()>1) {
+    if (Comm->getRank() == 0) {
+      cout << "MrHyDE WARNING: Adjoints are not yet implemented for multiple physics sets." << endl;
+    }
   }
   else {
 
