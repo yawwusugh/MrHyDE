@@ -953,23 +953,30 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
   maxnorm = std::max(maxnorm, (ScalarT)nrm[0]);
   p_over->normInf(nrm);
   maxnorm = std::max(maxnorm, (ScalarT)nrm[0]);
-  if (maxnorm == 0.0) {
+  if (maxnorm < std::numeric_limits<ScalarT>::min()) {
     res->putScalar(0.0);
     return;
   }
-  ScalarT scale = 1.0e100/maxnorm;
+  // Scale in two steps (normalize, then 1e100) and undo it in two steps: a single factor
+  // 1e100/maxnorm overflows for maxnorm < ~1e-208, and maxnorm*1e-100 underflows likewise
+  ScalarT inv_norm = 1.0/maxnorm;
   vector_RCP xs = linalg->getNewOverlappedVector(0), ys = linalg->getNewOverlappedVector(1);
-  xs->update(scale, *x_over, 0.0);
-  ys->update(scale, *y_over, 0.0);
+  xs->update(inv_norm, *x_over, 0.0);
+  xs->scale(1.0e100);
+  ys->update(inv_norm, *y_over, 0.0);
+  ys->scale(1.0e100);
   vector_RCP ps = pzero;
   if (p_over != pzero) {
     ps = linalg->getNewOverlappedParamVector();
-    ps->update(scale, *p_over, 0.0);
+    ps->update(inv_norm, *p_over, 0.0);
+    ps->scale(1.0e100);
   }
   vector_RCP res0 = linalg->getNewVector(set);
   evalRes(xs, ys, ps, res);
   evalRes(zero0, zero1, pzero, res0);
-  res->update(-1.0/scale, *res0, 1.0/scale);
+  res->update(-1.0, *res0, 1.0);
+  res->scale(1.0e-100);
+  res->scale(maxnorm);
 }
 
 // ========================================================================================
