@@ -244,7 +244,30 @@ public:
                      vector<vector_RCP> & phi,
                      vector<vector_RCP> & phi_stage,
                      vector<vector_RCP> & phi_prev );
-  
+
+  /**
+   * @brief x = deltat*b(0)*M_set^{-1} rhs, with the same mass operator as explicitSolver.
+   * @param[in] set Physics set index
+   * @param[in,out] rhs Right-hand side (owned map; overwritten)
+   * @param[out] x Result (owned map)
+   */
+  void applyExplicitMassInverse(const size_t & set, vector_RCP & rhs, vector_RCP & x);
+
+  /**
+   * @brief Linear part of the explicit residual of a set: res = r(x,y) - r(0,0), where
+   *        r = -R is what assembleRes returns, x is the state of set 0, y the state of set 1,
+   *        the discretized parameters are zero and the time derivative of the set is zero.
+   * @param[in] set Physics set index
+   * @param[in] x_over State of set 0 (overlapped)
+   * @param[in] y_over State of set 1 (overlapped)
+   * @param[out] res Result (owned map of set)
+   * @param[in] linear_part If false, return the full r(x,y)
+   * @param[in] p_over Discretized parameters used in r(x,y) (overlapped); null means zero
+   */
+  void explicitLinearResidual(const size_t & set, vector_RCP & x_over, vector_RCP & y_over,
+                              vector_RCP & res, const bool & linear_part = true,
+                              vector_RCP p_over = Teuchos::null);
+
   /** @brief Solve linearized state system */
   void stateSolve(vector<vector_RCP> &sol,const vector<vector_RCP> &forcing);
   

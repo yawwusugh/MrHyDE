@@ -830,8 +830,141 @@ int SolverManager<Node>::explicitSolver(const size_t & set, const size_t & stage
   }
   
   debugger->print(1, "******** Finished SolverManager::explicitSolver");
-  
+
   return status;
+}
+
+// ========================================================================================
+// x = deltat*b(0)*M_set^{-1} rhs, using the same mass operator as explicitSolver
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::applyExplicitMassInverse(const size_t & set, vector_RCP & rhs, vector_RCP & x) {
+
+  // The (matrix-free) mass operators use the current physics set of the assembler
+  assembler->updatePhysicsSet(set);
+
+  ScalarT wt = deltat*butcher_b[set](0);
+  x->putScalar(0.0);
+
+  Teuchos::Array<typename Teuchos::ScalarTraits<ScalarT>::magnitudeType> rnorm(1);
+  rhs->norm2(rnorm);
+  if (rnorm[0] <= 1.0e-100) {
+    return;
+  }
+
+  if (!assembler->lump_mass) {
+    rhs->scale(wt);
+    if (assembler->matrix_free) {
+      this->matrixFreePCG(set, rhs, x, diagMass[set],
+                          settings->sublist("Solver").get("linear TOL",1.0e-2),
+                          settings->sublist("Solver").get("max linear iters",100));
+    }
+    else {
+      if (use_custom_PCG) {
+        this->PCG(set, explicitMass[set], rhs, x, diagMass[set],
+                  settings->sublist("Solver").get("linear TOL",1.0e-2),
+                  settings->sublist("Solver").get("max linear iters",100));
+      }
+      else {
+        linalg->linearSolverL2(set, explicitMass[set], rhs, x);
+      }
+    }
+  }
+  else {
+    typedef typename Node::execution_space LA_exec;
+    auto x_view = x->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+    auto rhs_view = rhs->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+    auto dm_view = diagMass[set]->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+    parallel_for("explicit adjoint apply invdiag",
+                 RangePolicy<LA_exec>(0,x_view.extent(0)),
+                 MRHYDE_LAMBDA (const int k ) {
+      x_view(k,0) = wt*rhs_view(k,0)/dm_view(k,0);
+    });
+  }
+}
+
+// ========================================================================================
+// Linear part of the explicit residual: res = r(x,y) - r(0,0) with r = -R (what assembleRes
+// returns), zero discretized parameters and zero time derivative for the current set
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP & x_over, vector_RCP & y_over,
+                                                 vector_RCP & res, const bool & linear_part,
+                                                 vector_RCP p_over) {
+
+  assembler->updatePhysicsSet(set);
+
+  vector_RCP pzero;
+  if (params->num_discretized_params > 0) {
+    pzero = linalg->getNewOverlappedParamVector();
+    pzero->putScalar(0.0);
+  }
+  else {
+    pzero = params->getDiscretizedParamsOver();
+  }
+
+  auto evalRes = [&](vector_RCP & u0, vector_RCP & u1, vector_RCP & pvec, vector_RCP & out) {
+    vector<vector_RCP> lsol = {u0, u1};
+    // stage = prev = current state, so the time derivative of this set vanishes (as in explicitSolver)
+    vector<vector_RCP> lstage = {lsol[set]};
+    vector<vector_RCP> lprev = {lsol[set]};
+    vector<vector_RCP> zero_vec;
+    vector_RCP res_over = linalg->getNewOverlappedVector(set);
+    res_over->putScalar(0.0);
+    matrix_RCP J_over;
+    assembler->assembleRes(set, 0, lsol, lstage, lprev, zero_vec, zero_vec, zero_vec,
+                           pvec, pzero, res_over, J_over, isTransient, current_time, deltat);
+    if (linalg->getHaveOverlapped()) {
+      linalg->exportVectorFromOverlapped(set, out, res_over);
+    }
+    else {
+      out->assign(*res_over);
+    }
+  };
+
+  vector_RCP zero0 = linalg->getNewOverlappedVector(0);
+  vector_RCP zero1 = linalg->getNewOverlappedVector(1);
+  zero0->putScalar(0.0);
+  zero1->putScalar(0.0);
+
+  if (Teuchos::is_null(p_over)) {
+    p_over = pzero;
+  }
+  if (!linear_part) {
+    evalRes(x_over, y_over, p_over, res);
+    return;
+  }
+
+  // r is affine: r(0,0) holds the physical source. Adjoint vectors can be many orders of magnitude
+  // below the source, so r(x,y) - r(0,0) would cancel catastrophically. Evaluate at s*(x,y,p) with
+  // max norm 1e100 instead, so the linear part dominates, and divide by s.
+  Teuchos::Array<typename Teuchos::ScalarTraits<ScalarT>::magnitudeType> nrm(1);
+  ScalarT maxnorm = 0.0;
+  x_over->normInf(nrm);
+  maxnorm = std::max(maxnorm, (ScalarT)nrm[0]);
+  y_over->normInf(nrm);
+  maxnorm = std::max(maxnorm, (ScalarT)nrm[0]);
+  p_over->normInf(nrm);
+  maxnorm = std::max(maxnorm, (ScalarT)nrm[0]);
+  if (maxnorm == 0.0) {
+    res->putScalar(0.0);
+    return;
+  }
+  ScalarT scale = 1.0e100/maxnorm;
+  vector_RCP xs = linalg->getNewOverlappedVector(0), ys = linalg->getNewOverlappedVector(1);
+  xs->update(scale, *x_over, 0.0);
+  ys->update(scale, *y_over, 0.0);
+  vector_RCP ps = pzero;
+  if (p_over != pzero) {
+    ps = linalg->getNewOverlappedParamVector();
+    ps->update(scale, *p_over, 0.0);
+  }
+  vector_RCP res0 = linalg->getNewVector(set);
+  evalRes(xs, ys, ps, res);
+  evalRes(zero0, zero1, pzero, res0);
+  res->update(-1.0/scale, *res0, 1.0/scale);
 }
 
 // ========================================================================================
