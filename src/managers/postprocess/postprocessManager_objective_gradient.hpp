@@ -1738,3 +1738,192 @@ PostprocessManager<Node>::computeDiscreteSensitivities(vector<vector_RCP> &u,
   return gradient;
 }
 
+
+// ========================================================================================
+// AD-free state gradient of the EM-energy objective (explicit split adjoint)
+// ========================================================================================
+
+template <class Node>
+void PostprocessManager<Node>::addEnergyObjectiveGradState(const size_t & set, vector_RCP & sol,
+                                                           const ScalarT & scale, vector_RCP & grad)
+{
+  
+  debugger->print(1, "******** Starting PostprocessManager::addEnergyObjectiveGradState ...");
+  
+  typedef typename Node::device_type LA_device;
+  typedef typename Node::execution_space LA_exec;
+  bool data_avail = Kokkos::SpaceAccessibility<LA_exec, AssemblyDevice::memory_space>::accessible;
+  TEUCHOS_TEST_FOR_EXCEPTION(!data_avail, std::runtime_error,
+                             "Error: addEnergyObjectiveGradState requires the LA and assembly devices to share memory.");
+  
+  vector_RCP grad_over = linalg->getNewOverlappedVector(set);
+  grad_over->putScalar(0.0);
+  
+  auto sol_kv = sol->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto g_kv = grad_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto u_vec = Kokkos::subview(sol_kv, Kokkos::ALL(), 0);
+  auto g_vec = Kokkos::subview(g_kv, Kokkos::ALL(), 0);
+  
+  for (size_t r = 0; r < objectives.size(); ++r) {
+    if (objectives[r].type == "integrated control") {
+      
+      TEUCHOS_TEST_FOR_EXCEPTION(objectives[r].regularizations.size() > 0, std::runtime_error,
+                                 "Error: the explicit split adjoint does not support objective regularizations.");
+      
+      size_t block = objectives[r].block;
+      auto wset = assembler->wkset[block];
+      TEUCHOS_TEST_FOR_EXCEPTION(wset->set_varlist[set].size() != 1, std::runtime_error,
+                                 "Error: addEnergyObjectiveGradState requires one variable in the physics set.");
+      ScalarT wt = objectives[r].weight*scale;
+      
+      for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp) {
+        
+        assembler->updateWorkset(block, grp, 0, 0, true);
+        
+        auto basis = wset->basis[wset->set_usebasis[set][0]];
+        auto wts = wset->wts;
+        auto off = Kokkos::subview(wset->set_offsets[set], 0, Kokkos::ALL());
+        auto LIDs = assembler->groups[block][grp]->LIDs[set];
+        size_type numdof = basis.extent(1);
+        size_type numip = basis.extent(2);
+        size_type dim = basis.extent(3);
+        
+        // grad_i += wt*int u.v_i, u = sum_j u_j v_j
+        parallel_for("explicit adjoint energy objective grad",
+                     RangePolicy<AssemblyExec>(0,LIDs.extent(0)),
+                     MRHYDE_LAMBDA (const int elem ) {
+          for (size_type pt=0; pt<numip; ++pt) {
+            ScalarT u[3] = {0.0, 0.0, 0.0};
+            for (size_type j=0; j<numdof; ++j) {
+              ScalarT uj = u_vec(LIDs(elem,off(j)));
+              for (size_type d=0; d<dim; ++d) {
+                u[d] += uj*basis(elem,j,pt,d);
+              }
+            }
+            for (size_type i=0; i<numdof; ++i) {
+              ScalarT val = 0.0;
+              for (size_type d=0; d<dim; ++d) {
+                val += u[d]*basis(elem,i,pt,d);
+              }
+              Kokkos::atomic_add(&(g_vec(LIDs(elem,off(i)))), wt*val*wts(elem,pt));
+            }
+          }
+        });
+      }
+    }
+  }
+  
+  vector_RCP g_owned = linalg->getNewVector(set);
+  if (linalg->getHaveOverlapped()) {
+    linalg->exportVectorFromOverlapped(set, g_owned, grad_over);
+  }
+  else {
+    g_owned->assign(*grad_over);
+  }
+  grad->update(1.0, *g_owned, 1.0);
+  
+  debugger->print(1, "******** Finished PostprocessManager::addEnergyObjectiveGradState");
+}
+
+// ========================================================================================
+// AD-free control transpose F^T mu_E (explicit split adjoint)
+// ========================================================================================
+
+template <class Node>
+void PostprocessManager<Node>::computeControlTranspose(vector_RCP & muE, const ScalarT & scale, vector_RCP & sens)
+{
+  
+  debugger->print(1, "******** Starting PostprocessManager::computeControlTranspose ...");
+  
+  typedef typename Node::device_type LA_device;
+  typedef typename Node::execution_space LA_exec;
+  bool data_avail = Kokkos::SpaceAccessibility<LA_exec, AssemblyDevice::memory_space>::accessible;
+  TEUCHOS_TEST_FOR_EXCEPTION(!data_avail, std::runtime_error,
+                             "Error: computeControlTranspose requires the LA and assembly devices to share memory.");
+  TEUCHOS_TEST_FOR_EXCEPTION(params->discretized_param_names.size() != 1, std::runtime_error,
+                             "Error: the explicit split adjoint requires exactly one discretized parameter.");
+  
+  // Control blocks: current = curl(<param>); any other use of the parameter in the current is unsupported
+  string pname = params->discretized_param_names[0];
+  auto nospace = [](string s) {
+    s.erase(std::remove(s.begin(), s.end(), ' '), s.end());
+    return s;
+  };
+  vector<bool> is_control(blocknames.size(), false);
+  vector<string> comps = {"x", "y", "z"};
+  for (size_t block=0; block<blocknames.size(); ++block) {
+    Teuchos::ParameterList & funcs = settings->sublist("Functions");
+    Teuchos::ParameterList fs = funcs.isSublist(blocknames[block]) ? funcs.sublist(blocknames[block]) : funcs;
+    size_t nmatch = 0, nuse = 0;
+    for (size_t c=0; c<comps.size(); ++c) {
+      string cur = nospace(fs.get<string>("current " + comps[c], "0.0"));
+      if (cur == "curl(" + pname + ")[" + comps[c] + "]") {
+        nmatch++;
+      }
+      if (cur.find(pname) != string::npos) {
+        nuse++;
+      }
+    }
+    TEUCHOS_TEST_FOR_EXCEPTION(nuse != nmatch || (nmatch != 0 && nmatch != comps.size()), std::runtime_error,
+                               "Error: the explicit split adjoint requires 'current x/y/z' = curl(" + pname + ")[x/y/z] wherever " + pname + " is used (block " + blocknames[block] + ").");
+    is_control[block] = (nmatch == comps.size());
+  }
+  
+  vector_RCP p_over = linalg->getNewOverlappedParamVector();
+  p_over->putScalar(0.0);
+  
+  auto mu_kv = muE->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto p_kv = p_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto mu_vec = Kokkos::subview(mu_kv, Kokkos::ALL(), 0);
+  auto p_vec = Kokkos::subview(p_kv, Kokkos::ALL(), 0);
+  
+  for (size_t block=0; block<blocknames.size(); ++block) {
+    if (!is_control[block]) {
+      continue;
+    }
+    auto wset = assembler->wkset[block];
+    for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp) {
+      
+      assembler->updateWorkset(block, grp, 0, 0, true);
+      
+      auto ebasis = wset->basis[wset->set_usebasis[0][0]];
+      auto pcurl = wset->basis_curl[wset->paramusebasis[0]];
+      auto wts = wset->wts;
+      auto eoff = Kokkos::subview(wset->set_offsets[0], 0, Kokkos::ALL());
+      auto poff = Kokkos::subview(wset->paramoffsets, 0, Kokkos::ALL());
+      auto LIDs = assembler->groups[block][grp]->LIDs[0];
+      auto pLIDs = assembler->groups[block][grp]->paramLIDs;
+      size_type numedof = ebasis.extent(1);
+      size_type numpdof = pcurl.extent(1);
+      size_type numip = ebasis.extent(2);
+      size_type dim = ebasis.extent(3);
+      ScalarT wt = scale;
+      
+      // p_k += scale*int curl(phi_k).mu_E
+      parallel_for("explicit adjoint control transpose",
+                   RangePolicy<AssemblyExec>(0,LIDs.extent(0)),
+                   MRHYDE_LAMBDA (const int elem ) {
+        for (size_type pt=0; pt<numip; ++pt) {
+          ScalarT m[3] = {0.0, 0.0, 0.0};
+          for (size_type j=0; j<numedof; ++j) {
+            ScalarT mj = mu_vec(LIDs(elem,eoff(j)));
+            for (size_type d=0; d<dim; ++d) {
+              m[d] += mj*ebasis(elem,j,pt,d);
+            }
+          }
+          for (size_type k=0; k<numpdof; ++k) {
+            ScalarT val = 0.0;
+            for (size_type d=0; d<dim; ++d) {
+              val += m[d]*pcurl(elem,k,pt,d);
+            }
+            Kokkos::atomic_add(&(p_vec(pLIDs(elem,poff(k)))), wt*val*wts(elem,pt));
+          }
+        }
+      });
+    }
+  }
+  
+  linalg->exportParamVectorFromOverlapped(sens, p_over);
+  
+  debugger->print(1, "******** Finished PostprocessManager::computeControlTranspose");
+}

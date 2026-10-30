@@ -325,10 +325,33 @@ public:
                                const ScalarT & current_time,
                                const int & tindex,
                                const ScalarT & deltat);
-  
+
+  /**
+   * @brief AD-free state gradient of the EM-energy 'integrated control' objectives (explicit split adjoint).
+   *        grad += sum_obj weight*scale*int_{obj block} u.v over the objective's quadrature, i.e.,
+   *        the gradient of weight*int 0.5*c*|u|^2 with scale = dt*c (c = eps for E, 1/mu for B).
+   *
+   * @param[in] set     Physics set (single vector-valued variable).
+   * @param[in] sol     State of the set (overlapped).
+   * @param[in] scale   dt times the coefficient of |u|^2/2 in the objective.
+   * @param[in,out] grad Gradient (owned map of set), summed into.
+   */
+  void addEnergyObjectiveGradState(const size_t & set, vector_RCP & sol, const ScalarT & scale,
+                                   vector_RCP & grad);
+
+  /**
+   * @brief AD-free control transpose (explicit split adjoint): sens = scale*int curl(phi_k).mu_E over the
+   *        blocks where the current is curl(<discretized parameter>), i.e., scale*F^T mu_E.
+   *
+   * @param[in] muE    E-space vector (overlapped).
+   * @param[in] scale  Scale factor (-1/eps for the 3D maxwell module).
+   * @param[out] sens  Result (owned parameter map, overwritten).
+   */
+  void computeControlTranspose(vector_RCP & muE, const ScalarT & scale, vector_RCP & sens);
+
   // ========================================================================================
   // ========================================================================================
-  
+
   /**
    * @brief Writes the current solution fields to output (Exodus, HDF5, etc.).
    *
