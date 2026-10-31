@@ -1264,6 +1264,16 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
           Bo->assign(*Bn);
         }
         objCheck[0] = dotp(gE, Eo) + dotp(gB, Bo);
+        // The record at t_n also holds the regularization of slot n-1 (quadratic: <R'(p),p> = 2R(p))
+        if (params->num_discretized_params > 0 && n > 0) {
+          params->updateDynamicParams(n-1);
+          vector_RCP p_slot = params->getDiscretizedParamsOver();
+          vector_RCP gp = linalg->getNewParamVector(), p_owned = linalg->getNewParamVector();
+          gp->putScalar(0.0);
+          postproc->addRegularizationGradParam(p_slot, deltat, gp);
+          linalg->exportParamVectorFromOverlappedReplace(p_owned, p_slot);
+          objCheck[0] += dotp(gp, p_owned);
+        }
         ScalarT lval = 0.0, gval = 0.0;
         for (size_t r=0; r<postproc->objectives.size(); ++r) {
           if (postproc->objectives[r].objective_values.size() > n) {
@@ -1366,12 +1376,15 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
     this->applyExplicitMassInverse(0, rhsE, muE);
     toOverlapped(0, muE_over, muE);
 
-    // dJ/dp_{n-1} = -(1/eps) F^T mu_E^n
+    // dJ/dp_{n-1} = -(1/eps) F^T mu_E^n + dt R'(p_{n-1}) (the record at t_n sees slot n-1)
     if (params->num_discretized_params > 0) {
       postproc->computeControlTranspose(muE_over, -1.0/eps, sens);
       auto disc_grad = gradient.getField();
       vector_RCP curr_grad = gradient.haveDynamicField() ? disc_grad[n-1]->getVector() : disc_grad[0]->getVector();
       curr_grad->update(1.0, *sens, 1.0);
+      params->updateDynamicParams(n-1);
+      vector_RCP p_slot = params->getDiscretizedParamsOver();
+      postproc->addRegularizationGradParam(p_slot, deltat, curr_grad);
     }
 
     std::swap(Ebar, Ebar_next);
@@ -1411,6 +1424,18 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
       ScalarT gterm = dotp(gk, dp);
       gdp += gterm;
       gdpabs += std::abs(gterm);
+
+      // Regularization of slot n: dJ += dt <R'(p_n), dp_n>
+      {
+        params->updateDynamicParams(n);
+        vector_RCP p_slot = params->getDiscretizedParamsOver();
+        vector_RCP gp = linalg->getNewParamVector();
+        gp->putScalar(0.0);
+        postproc->addRegularizationGradParam(p_slot, deltat, gp);
+        ScalarT rterm = dotp(gp, dp);
+        dJ += rterm;
+        dJabs += std::abs(rterm);
+      }
 
       current_time = soln_source[0]->getSpecificTime(store_index, n);
       assembler->updateStage(0, current_time, deltat);

@@ -1765,11 +1765,9 @@ void PostprocessManager<Node>::addEnergyObjectiveGradState(const size_t & set, v
   auto g_vec = Kokkos::subview(g_kv, Kokkos::ALL(), 0);
   
   for (size_t r = 0; r < objectives.size(); ++r) {
-    if (objectives[r].type == "integrated control") {
-      
-      TEUCHOS_TEST_FOR_EXCEPTION(objectives[r].regularizations.size() > 0, std::runtime_error,
-                                 "Error: the explicit split adjoint does not support objective regularizations.");
-      
+    // Regularizations are handled by addRegularizationGradParam; a zero weight carries only those
+    if (objectives[r].type == "integrated control" && objectives[r].weight != 0.0) {
+
       size_t block = objectives[r].block;
       auto wset = assembler->wkset[block];
       TEUCHOS_TEST_FOR_EXCEPTION(wset->set_varlist[set].size() != 1, std::runtime_error,
@@ -1924,6 +1922,97 @@ void PostprocessManager<Node>::computeControlTranspose(vector_RCP & muE, const S
   }
   
   linalg->exportParamVectorFromOverlapped(sens, p_over);
-  
+
   debugger->print(1, "******** Finished PostprocessManager::computeControlTranspose");
+}
+
+// ========================================================================================
+// AD-free gradient of the l2reg/curlreg regularizations (explicit split adjoint)
+// ========================================================================================
+
+template <class Node>
+void PostprocessManager<Node>::addRegularizationGradParam(vector_RCP & p_over, const ScalarT & scale, vector_RCP & grad)
+{
+
+  debugger->print(1, "******** Starting PostprocessManager::addRegularizationGradParam ...");
+
+  typedef typename Node::device_type LA_device;
+  typedef typename Node::execution_space LA_exec;
+  bool data_avail = Kokkos::SpaceAccessibility<LA_exec, AssemblyDevice::memory_space>::accessible;
+  TEUCHOS_TEST_FOR_EXCEPTION(!data_avail, std::runtime_error,
+                             "Error: addRegularizationGradParam requires the LA and assembly devices to share memory.");
+
+  // The objectives (and their regularizations) are the same on every rank, so this return is rank-uniform
+  bool have_regs = false;
+  for (size_t r = 0; r < objectives.size(); ++r) {
+    have_regs = have_regs || (objectives[r].regularizations.size() > 0);
+  }
+  if (!have_regs) {
+    return;
+  }
+
+  vector_RCP g_over = linalg->getNewOverlappedParamVector();
+  g_over->putScalar(0.0);
+
+  auto p_kv = p_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto g_kv = g_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto p_vec = Kokkos::subview(p_kv, Kokkos::ALL(), 0);
+  auto g_vec = Kokkos::subview(g_kv, Kokkos::ALL(), 0);
+
+  for (size_t r = 0; r < objectives.size(); ++r) {
+    for (size_t reg = 0; reg < objectives[r].regularizations.size(); ++reg) {
+
+      auto & thisreg = objectives[r].regularizations[reg];
+      TEUCHOS_TEST_FOR_EXCEPTION(thisreg.type != "integrated" || thisreg.location != "volume", std::runtime_error,
+                                 "Error: the explicit split adjoint only supports integrated volume regularizations (" + thisreg.name + ").");
+      TEUCHOS_TEST_FOR_EXCEPTION(thisreg.name != "l2reg" && thisreg.name != "curlreg", std::runtime_error,
+                                 "Error: the explicit split adjoint only supports the regularizations 'l2reg' (0.5*|p|^2) and 'curlreg' (0.5*|curl p|^2), not " + thisreg.name + ".");
+      bool use_curl = (thisreg.name == "curlreg");
+
+      size_t block = objectives[r].block;
+      auto wset = assembler->wkset[block];
+      ScalarT wt = scale*thisreg.weight;
+
+      for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp) {
+
+        assembler->updateWorkset(block, grp, 0, 0, true);
+
+        auto pbasis = use_curl ? wset->basis_curl[wset->paramusebasis[0]] : wset->basis[wset->paramusebasis[0]];
+        auto wts = wset->wts;
+        auto poff = Kokkos::subview(wset->paramoffsets, 0, Kokkos::ALL());
+        auto pLIDs = assembler->groups[block][grp]->paramLIDs;
+        size_type numpdof = pbasis.extent(1);
+        size_type numip = pbasis.extent(2);
+        size_type dim = pbasis.extent(3);
+
+        // g_k += wt*int Lp.L(phi_k), L = identity (l2reg) or curl (curlreg), p = sum_j p_j phi_j
+        parallel_for("explicit adjoint regularization grad",
+                     RangePolicy<AssemblyExec>(0,pLIDs.extent(0)),
+                     MRHYDE_LAMBDA (const int elem ) {
+          for (size_type pt=0; pt<numip; ++pt) {
+            ScalarT q[3] = {0.0, 0.0, 0.0};
+            for (size_type j=0; j<numpdof; ++j) {
+              ScalarT pj = p_vec(pLIDs(elem,poff(j)));
+              for (size_type d=0; d<dim; ++d) {
+                q[d] += pj*pbasis(elem,j,pt,d);
+              }
+            }
+            for (size_type k=0; k<numpdof; ++k) {
+              ScalarT val = 0.0;
+              for (size_type d=0; d<dim; ++d) {
+                val += q[d]*pbasis(elem,k,pt,d);
+              }
+              Kokkos::atomic_add(&(g_vec(pLIDs(elem,poff(k)))), wt*val*wts(elem,pt));
+            }
+          }
+        });
+      }
+    }
+  }
+
+  vector_RCP g_owned = linalg->getNewParamVector();
+  linalg->exportParamVectorFromOverlapped(g_owned, g_over);
+  grad->update(1.0, *g_owned, 1.0);
+
+  debugger->print(1, "******** Finished PostprocessManager::addRegularizationGradParam");
 }

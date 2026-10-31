@@ -349,6 +349,18 @@ public:
    */
   void computeControlTranspose(vector_RCP & muE, const ScalarT & scale, vector_RCP & sens);
 
+  /**
+   * @brief AD-free gradient of the volume regularizations (explicit split adjoint), identified by name:
+   *        'l2reg' = 0.5*|p|^2 and 'curlreg' = 0.5*|curl p|^2. Adds
+   *        scale*regwt*int p.phi_k (l2reg) or scale*regwt*int curl(p).curl(phi_k) (curlreg) over the
+   *        blocks of the objective that owns the regularization. Linear in p, so p = v gives R''v.
+   *
+   * @param[in] p_over  Discretized parameter (overlapped), e.g. one dynamic slot.
+   * @param[in] scale   Time weight of the slot (dt).
+   * @param[in,out] grad Gradient (owned parameter map), summed into.
+   */
+  void addRegularizationGradParam(vector_RCP & p_over, const ScalarT & scale, vector_RCP & grad);
+
   // ========================================================================================
   // ========================================================================================
 
