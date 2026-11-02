@@ -1934,6 +1934,8 @@ template <class Node>
 void PostprocessManager<Node>::addRegularizationGradParam(vector_RCP & p_over, const ScalarT & scale, vector_RCP & grad)
 {
 
+  Teuchos::TimeMonitor localtimer(*regGradParamTimer);
+
   debugger->print(1, "******** Starting PostprocessManager::addRegularizationGradParam ...");
 
   typedef typename Node::device_type LA_device;
@@ -1951,68 +1953,102 @@ void PostprocessManager<Node>::addRegularizationGradParam(vector_RCP & p_over, c
     return;
   }
 
-  vector_RCP g_over = linalg->getNewOverlappedParamVector();
-  g_over->putScalar(0.0);
+  // Work vectors kept across calls: this runs once per time slot in every adjoint and incremental sweep
+  if (Teuchos::is_null(reg_grad_over)) {
+    reg_grad_over = linalg->getNewOverlappedParamVector();
+    reg_grad_owned = linalg->getNewParamVector();
+  }
+  reg_grad_over->putScalar(0.0);
 
   auto p_kv = p_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-  auto g_kv = g_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto g_kv = reg_grad_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
   auto p_vec = Kokkos::subview(p_kv, Kokkos::ALL(), 0);
   auto g_vec = Kokkos::subview(g_kv, Kokkos::ALL(), 0);
 
   for (size_t r = 0; r < objectives.size(); ++r) {
-    for (size_t reg = 0; reg < objectives[r].regularizations.size(); ++reg) {
+    if (objectives[r].regularizations.size() == 0) {
+      continue;
+    }
 
+    // Both penalties of an objective share one pass: wl2*int p.phi_k + wcurl*int curl(p).curl(phi_k)
+    ScalarT wl2 = 0.0, wcurl = 0.0;
+    for (size_t reg = 0; reg < objectives[r].regularizations.size(); ++reg) {
       auto & thisreg = objectives[r].regularizations[reg];
       TEUCHOS_TEST_FOR_EXCEPTION(thisreg.type != "integrated" || thisreg.location != "volume", std::runtime_error,
                                  "Error: the explicit split adjoint only supports integrated volume regularizations (" + thisreg.name + ").");
       TEUCHOS_TEST_FOR_EXCEPTION(thisreg.name != "l2reg" && thisreg.name != "curlreg", std::runtime_error,
                                  "Error: the explicit split adjoint only supports the regularizations 'l2reg' (0.5*|p|^2) and 'curlreg' (0.5*|curl p|^2), not " + thisreg.name + ".");
-      bool use_curl = (thisreg.name == "curlreg");
+      if (thisreg.name == "curlreg") {
+        wcurl += scale*thisreg.weight;
+      }
+      else {
+        wl2 += scale*thisreg.weight;
+      }
+    }
+    bool use_l2 = (wl2 != 0.0), use_curl = (wcurl != 0.0);
+    if (!use_l2 && !use_curl) {
+      continue;
+    }
 
-      size_t block = objectives[r].block;
-      auto wset = assembler->wkset[block];
-      ScalarT wt = scale*thisreg.weight;
+    size_t block = objectives[r].block;
+    auto wset = assembler->wkset[block];
+    int pb = wset->paramusebasis[0];
+    auto poff = Kokkos::subview(wset->paramoffsets, 0, Kokkos::ALL());
 
-      for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp) {
+    for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp) {
 
+      // The kernel needs only the parameter basis, its curl and the weights. A group that stores its basis
+      // (or uses the basis database) holds them already; otherwise updateWorkset computes them.
+      auto group = assembler->groups[block][grp];
+      CompressedView<View_Sc4> pbasis, pcurl;
+      CompressedView<View_Sc2> wts;
+      if (group->storeAll || group->group_data->use_basis_database) {
+        if (use_l2) pbasis = group->basis[pb];
+        if (use_curl) pcurl = group->basis_curl[pb];
+        wts = group->wts;
+      }
+      else {
         assembler->updateWorkset(block, grp, 0, 0, true);
+        if (use_l2) pbasis = wset->basis[pb];
+        if (use_curl) pcurl = wset->basis_curl[pb];
+        wts = wset->wts;
+      }
 
-        auto pbasis = use_curl ? wset->basis_curl[wset->paramusebasis[0]] : wset->basis[wset->paramusebasis[0]];
-        auto wts = wset->wts;
-        auto poff = Kokkos::subview(wset->paramoffsets, 0, Kokkos::ALL());
-        auto pLIDs = assembler->groups[block][grp]->paramLIDs;
-        size_type numpdof = pbasis.extent(1);
-        size_type numip = pbasis.extent(2);
-        size_type dim = pbasis.extent(3);
+      auto pLIDs = group->paramLIDs;
+      auto & refbasis = use_l2 ? pbasis : pcurl;
+      size_type numpdof = refbasis.extent(1);
+      size_type numip = refbasis.extent(2);
+      size_type dim = refbasis.extent(3);
 
-        // g_k += wt*int Lp.L(phi_k), L = identity (l2reg) or curl (curlreg), p = sum_j p_j phi_j
-        parallel_for("explicit adjoint regularization grad",
-                     RangePolicy<AssemblyExec>(0,pLIDs.extent(0)),
-                     MRHYDE_LAMBDA (const int elem ) {
-          for (size_type pt=0; pt<numip; ++pt) {
-            ScalarT q[3] = {0.0, 0.0, 0.0};
-            for (size_type j=0; j<numpdof; ++j) {
-              ScalarT pj = p_vec(pLIDs(elem,poff(j)));
-              for (size_type d=0; d<dim; ++d) {
-                q[d] += pj*pbasis(elem,j,pt,d);
-              }
-            }
-            for (size_type k=0; k<numpdof; ++k) {
-              ScalarT val = 0.0;
-              for (size_type d=0; d<dim; ++d) {
-                val += q[d]*pbasis(elem,k,pt,d);
-              }
-              Kokkos::atomic_add(&(g_vec(pLIDs(elem,poff(k)))), wt*val*wts(elem,pt));
+      // g_k += int (wl2 p.phi_k + wcurl curl(p).curl(phi_k)), p = sum_j p_j phi_j
+      parallel_for("explicit adjoint regularization grad",
+                   RangePolicy<AssemblyExec>(0,pLIDs.extent(0)),
+                   MRHYDE_LAMBDA (const int elem ) {
+        for (size_type pt=0; pt<numip; ++pt) {
+          ScalarT q[3] = {0.0, 0.0, 0.0};
+          ScalarT c[3] = {0.0, 0.0, 0.0};
+          for (size_type j=0; j<numpdof; ++j) {
+            ScalarT pj = p_vec(pLIDs(elem,poff(j)));
+            for (size_type d=0; d<dim; ++d) {
+              if (use_l2) q[d] += pj*pbasis(elem,j,pt,d);
+              if (use_curl) c[d] += pj*pcurl(elem,j,pt,d);
             }
           }
-        });
-      }
+          for (size_type k=0; k<numpdof; ++k) {
+            ScalarT val = 0.0;
+            for (size_type d=0; d<dim; ++d) {
+              if (use_l2) val += wl2*q[d]*pbasis(elem,k,pt,d);
+              if (use_curl) val += wcurl*c[d]*pcurl(elem,k,pt,d);
+            }
+            Kokkos::atomic_add(&(g_vec(pLIDs(elem,poff(k)))), val*wts(elem,pt));
+          }
+        }
+      });
     }
   }
 
-  vector_RCP g_owned = linalg->getNewParamVector();
-  linalg->exportParamVectorFromOverlapped(g_owned, g_over);
-  grad->update(1.0, *g_owned, 1.0);
+  linalg->exportParamVectorFromOverlapped(reg_grad_owned, reg_grad_over);
+  grad->update(1.0, *reg_grad_owned, 1.0);
 
   debugger->print(1, "******** Finished PostprocessManager::addRegularizationGradParam");
 }
