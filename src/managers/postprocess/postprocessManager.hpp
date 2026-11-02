@@ -725,6 +725,8 @@ public:
   vector<ScalarT> weighted_norms; ///< Weighted norms used for error or misfit.
   vector<vector_RCP> norm_wts; ///< Weight vectors for norm computations.
   vector_RCP reg_grad_over, reg_grad_owned; ///< Work vectors reused by addRegularizationGradParam.
+  vector<vector<View_Sc3>> reg_elem_mats; ///< Regularization element matrices per objective and group (addRegularizationGradParam).
+  bool have_reg_elem_mats = false; ///< Whether reg_elem_mats has been built.
   bool have_norm_weights = false; ///< Whether norm weights have been initialized.
   
   bool compute_response, write_response, compute_error, compute_subgrid_error, compute_weighted_norm; ///< Flags for various postprocessing tasks.

@@ -1960,88 +1960,114 @@ void PostprocessManager<Node>::addRegularizationGradParam(vector_RCP & p_over, c
   }
   reg_grad_over->putScalar(0.0);
 
+  // The regularization gradient is linear in p with a fixed operator, so its element matrices are built on
+  // the first call and reused: K_e(k,j) = int (wl2 phi_j.phi_k + wcurl curl(phi_j).curl(phi_k)), where wl2
+  // and wcurl sum the weights of the objective's l2reg and curlreg. The time weight (scale) is applied per call.
+  if (!have_reg_elem_mats) {
+    reg_elem_mats = vector<vector<View_Sc3>>(objectives.size());
+    for (size_t r = 0; r < objectives.size(); ++r) {
+      if (objectives[r].regularizations.size() == 0) {
+        continue;
+      }
+
+      ScalarT wl2 = 0.0, wcurl = 0.0;
+      for (size_t reg = 0; reg < objectives[r].regularizations.size(); ++reg) {
+        auto & thisreg = objectives[r].regularizations[reg];
+        TEUCHOS_TEST_FOR_EXCEPTION(thisreg.type != "integrated" || thisreg.location != "volume", std::runtime_error,
+                                   "Error: the explicit split adjoint only supports integrated volume regularizations (" + thisreg.name + ").");
+        TEUCHOS_TEST_FOR_EXCEPTION(thisreg.name != "l2reg" && thisreg.name != "curlreg", std::runtime_error,
+                                   "Error: the explicit split adjoint only supports the regularizations 'l2reg' (0.5*|p|^2) and 'curlreg' (0.5*|curl p|^2), not " + thisreg.name + ".");
+        if (thisreg.name == "curlreg") {
+          wcurl += thisreg.weight;
+        }
+        else {
+          wl2 += thisreg.weight;
+        }
+      }
+      bool use_l2 = (wl2 != 0.0), use_curl = (wcurl != 0.0);
+      if (!use_l2 && !use_curl) {
+        continue;
+      }
+
+      size_t block = objectives[r].block;
+      auto wset = assembler->wkset[block];
+      int pb = wset->paramusebasis[0];
+
+      for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp) {
+
+        // A group that stores its basis (or uses the basis database) holds the parameter basis, its curl and
+        // the weights already; otherwise updateWorkset computes them.
+        auto group = assembler->groups[block][grp];
+        CompressedView<View_Sc4> pbasis, pcurl;
+        CompressedView<View_Sc2> wts;
+        if (group->storeAll || group->group_data->use_basis_database) {
+          if (use_l2) pbasis = group->basis[pb];
+          if (use_curl) pcurl = group->basis_curl[pb];
+          wts = group->wts;
+        }
+        else {
+          assembler->updateWorkset(block, grp, 0, 0, true);
+          if (use_l2) pbasis = wset->basis[pb];
+          if (use_curl) pcurl = wset->basis_curl[pb];
+          wts = wset->wts;
+        }
+
+        auto & refbasis = use_l2 ? pbasis : pcurl;
+        size_type numelem = group->paramLIDs.extent(0);
+        size_type numpdof = refbasis.extent(1);
+        size_type numip = refbasis.extent(2);
+        size_type dim = refbasis.extent(3);
+
+        View_Sc3 Kmat("regularization element matrices", numelem, numpdof, numpdof);
+        parallel_for("explicit adjoint regularization element matrices",
+                     RangePolicy<AssemblyExec>(0,numelem),
+                     MRHYDE_LAMBDA (const int elem ) {
+          for (size_type k=0; k<numpdof; ++k) {
+            for (size_type j=0; j<numpdof; ++j) {
+              ScalarT val = 0.0;
+              for (size_type pt=0; pt<numip; ++pt) {
+                ScalarT ip_val = 0.0;
+                for (size_type d=0; d<dim; ++d) {
+                  if (use_l2) ip_val += wl2*pbasis(elem,j,pt,d)*pbasis(elem,k,pt,d);
+                  if (use_curl) ip_val += wcurl*pcurl(elem,j,pt,d)*pcurl(elem,k,pt,d);
+                }
+                val += ip_val*wts(elem,pt);
+              }
+              Kmat(elem,k,j) = val;
+            }
+          }
+        });
+        reg_elem_mats[r].push_back(Kmat);
+      }
+    }
+    have_reg_elem_mats = true;
+  }
+
   auto p_kv = p_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
   auto g_kv = reg_grad_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
   auto p_vec = Kokkos::subview(p_kv, Kokkos::ALL(), 0);
   auto g_vec = Kokkos::subview(g_kv, Kokkos::ALL(), 0);
 
-  for (size_t r = 0; r < objectives.size(); ++r) {
-    if (objectives[r].regularizations.size() == 0) {
-      continue;
-    }
-
-    // Both penalties of an objective share one pass: wl2*int p.phi_k + wcurl*int curl(p).curl(phi_k)
-    ScalarT wl2 = 0.0, wcurl = 0.0;
-    for (size_t reg = 0; reg < objectives[r].regularizations.size(); ++reg) {
-      auto & thisreg = objectives[r].regularizations[reg];
-      TEUCHOS_TEST_FOR_EXCEPTION(thisreg.type != "integrated" || thisreg.location != "volume", std::runtime_error,
-                                 "Error: the explicit split adjoint only supports integrated volume regularizations (" + thisreg.name + ").");
-      TEUCHOS_TEST_FOR_EXCEPTION(thisreg.name != "l2reg" && thisreg.name != "curlreg", std::runtime_error,
-                                 "Error: the explicit split adjoint only supports the regularizations 'l2reg' (0.5*|p|^2) and 'curlreg' (0.5*|curl p|^2), not " + thisreg.name + ".");
-      if (thisreg.name == "curlreg") {
-        wcurl += scale*thisreg.weight;
-      }
-      else {
-        wl2 += scale*thisreg.weight;
-      }
-    }
-    bool use_l2 = (wl2 != 0.0), use_curl = (wcurl != 0.0);
-    if (!use_l2 && !use_curl) {
-      continue;
-    }
-
+  for (size_t r = 0; r < reg_elem_mats.size(); ++r) {
     size_t block = objectives[r].block;
-    auto wset = assembler->wkset[block];
-    int pb = wset->paramusebasis[0];
-    auto poff = Kokkos::subview(wset->paramoffsets, 0, Kokkos::ALL());
+    auto poff = Kokkos::subview(assembler->wkset[block]->paramoffsets, 0, Kokkos::ALL());
 
-    for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp) {
+    for (size_t grp = 0; grp < reg_elem_mats[r].size(); ++grp) {
+      auto Kmat = reg_elem_mats[r][grp];
+      auto pLIDs = assembler->groups[block][grp]->paramLIDs;
+      size_type numpdof = Kmat.extent(1);
+      ScalarT sc = scale;
 
-      // The kernel needs only the parameter basis, its curl and the weights. A group that stores its basis
-      // (or uses the basis database) holds them already; otherwise updateWorkset computes them.
-      auto group = assembler->groups[block][grp];
-      CompressedView<View_Sc4> pbasis, pcurl;
-      CompressedView<View_Sc2> wts;
-      if (group->storeAll || group->group_data->use_basis_database) {
-        if (use_l2) pbasis = group->basis[pb];
-        if (use_curl) pcurl = group->basis_curl[pb];
-        wts = group->wts;
-      }
-      else {
-        assembler->updateWorkset(block, grp, 0, 0, true);
-        if (use_l2) pbasis = wset->basis[pb];
-        if (use_curl) pcurl = wset->basis_curl[pb];
-        wts = wset->wts;
-      }
-
-      auto pLIDs = group->paramLIDs;
-      auto & refbasis = use_l2 ? pbasis : pcurl;
-      size_type numpdof = refbasis.extent(1);
-      size_type numip = refbasis.extent(2);
-      size_type dim = refbasis.extent(3);
-
-      // g_k += int (wl2 p.phi_k + wcurl curl(p).curl(phi_k)), p = sum_j p_j phi_j
+      // g_k += scale * sum_j K_e(k,j) p_j
       parallel_for("explicit adjoint regularization grad",
-                   RangePolicy<AssemblyExec>(0,pLIDs.extent(0)),
+                   RangePolicy<AssemblyExec>(0,Kmat.extent(0)),
                    MRHYDE_LAMBDA (const int elem ) {
-        for (size_type pt=0; pt<numip; ++pt) {
-          ScalarT q[3] = {0.0, 0.0, 0.0};
-          ScalarT c[3] = {0.0, 0.0, 0.0};
+        for (size_type k=0; k<numpdof; ++k) {
+          ScalarT val = 0.0;
           for (size_type j=0; j<numpdof; ++j) {
-            ScalarT pj = p_vec(pLIDs(elem,poff(j)));
-            for (size_type d=0; d<dim; ++d) {
-              if (use_l2) q[d] += pj*pbasis(elem,j,pt,d);
-              if (use_curl) c[d] += pj*pcurl(elem,j,pt,d);
-            }
+            val += Kmat(elem,k,j)*p_vec(pLIDs(elem,poff(j)));
           }
-          for (size_type k=0; k<numpdof; ++k) {
-            ScalarT val = 0.0;
-            for (size_type d=0; d<dim; ++d) {
-              if (use_l2) val += wl2*q[d]*pbasis(elem,k,pt,d);
-              if (use_curl) val += wcurl*c[d]*pcurl(elem,k,pt,d);
-            }
-            Kokkos::atomic_add(&(g_vec(pLIDs(elem,poff(k)))), val*wts(elem,pt));
-          }
+          Kokkos::atomic_add(&(g_vec(pLIDs(elem,poff(k)))), sc*val);
         }
       });
     }
