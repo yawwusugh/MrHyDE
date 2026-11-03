@@ -308,11 +308,13 @@ void PostprocessManager<Node>::computeObjective(vector<vector_RCP> &current_soln
           objectives[r].response_times.push_back(current_time);
         }
         
+        auto sensor_times_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[r].sensor_times);
+        auto sensor_points_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[r].sensor_points);
+        auto sensor_data_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[r].sensor_data);
         for (size_t pt = 0; pt < objectives[r].numSensors; ++pt)
         {
           size_t tindex = 0;
           bool foundtime = false;
-          auto sensor_times_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[r].sensor_times);
           for (size_type t = 0; t < sensor_times_host.extent(0); ++t)
           {
             if (std::abs(current_time - sensor_times_host(t)) < 1.0e-12)
@@ -330,16 +332,16 @@ void PostprocessManager<Node>::computeObjective(vector<vector_RCP> &current_soln
             size_t elem = objectives[r].sensor_owners(pt, 1);
             assembler->wkset[block]->isOnPoint = true;
             auto x = assembler->wkset[block]->getScalarField("x");
-            x(0, 0) = objectives[r].sensor_points(pt, 0);
+            Kokkos::deep_copy(Kokkos::subview(x, 0, 0), sensor_points_host(pt, 0));
             if (dimension > 1)
             {
               auto y = assembler->wkset[block]->getScalarField("y");
-              y(0, 0) = objectives[r].sensor_points(pt, 1);
+              Kokkos::deep_copy(Kokkos::subview(y, 0, 0), sensor_points_host(pt, 1));
             }
             if (dimension > 2)
             {
               auto z = assembler->wkset[block]->getScalarField("z");
-              z(0, 0) = objectives[r].sensor_points(pt, 2);
+              Kokkos::deep_copy(Kokkos::subview(z, 0, 0), sensor_points_host(pt, 2));
             }
             
             auto numDOF = assembler->groupData[block]->num_dof;
@@ -439,17 +441,18 @@ void PostprocessManager<Node>::computeObjective(vector<vector_RCP> &current_soln
             
             // Evaluate the response
             auto rdata = assembler->function_managers[block]->evaluate(objectives[r].name + " response", "point");
+            auto rval = rdata.getValueHost(0, 0);
             
             if (compute_response)
             {
-              sensordat(pt) = rdata(0, 0);
+              sensordat(pt) = rval;
             }
             
             if (compute_objective)
             {
               
               // Update the value of the objective
-              ScalarT diff = rdata(0, 0) - objectives[r].sensor_data(pt, tindex);
+              ScalarT diff = rval - sensor_data_host(pt, tindex);
               ScalarT sdiff = objectives[r].weight * diff * diff;
               totaldiff[r] += sdiff;
               if (check) {

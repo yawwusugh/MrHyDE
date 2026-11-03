@@ -537,11 +537,13 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
         objectives[obj].response_times.push_back(current_time);
       }
 
+      auto sensor_times_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[obj].sensor_times);
+      auto sensor_points_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[obj].sensor_points);
+      auto sensor_data_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[obj].sensor_data);
       for (size_t pt = 0; pt < objectives[obj].numSensors; ++pt)
       {
         size_t tindex = 0;
         bool foundtime = false;
-        auto sensor_times_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[obj].sensor_times);
         for (size_type t = 0; t < sensor_times_host.extent(0); ++t)
         {
           if (std::abs(current_time - sensor_times_host(t)) < 1.0e-12)
@@ -561,16 +563,16 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
           size_t elem = objectives[obj].sensor_owners(pt, 1);
           wset->isOnPoint = true;
           auto x = wset->getScalarField("x");
-          x(0, 0) = objectives[obj].sensor_points(pt, 0);
+          Kokkos::deep_copy(Kokkos::subview(x, 0, 0), sensor_points_host(pt, 0));
           if (dimension > 1)
           {
             auto y = wset->getScalarField("y");
-            y(0, 0) = objectives[obj].sensor_points(pt, 1);
+            Kokkos::deep_copy(Kokkos::subview(y, 0, 0), sensor_points_host(pt, 1));
           }
           if (dimension > 2)
           {
             auto z = wset->getScalarField("z");
-            z(0, 0) = objectives[obj].sensor_points(pt, 2);
+            Kokkos::deep_copy(Kokkos::subview(z, 0, 0), sensor_points_host(pt, 2));
           }
 
           for (size_t set=0; set<sol_kv.size(); ++set) {
@@ -661,17 +663,18 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
 
           // Evaluate the response
           auto rdata = fman->evaluate(objectives[obj].name + " response", "point");
+          auto rval = rdata.getValueHost(0, 0);
 
           if (compute_response)
           {
-            sensordat(pt) = rdata(0, 0).val();
+            sensordat(pt) = rval.val();
           }
 
           if (compute_objective)
           {
 
             // Update the value of the objective
-            EvalT diff = rdata(0, 0) - objectives[obj].sensor_data(pt, tindex);
+            EvalT diff = rval - sensor_data_host(pt, tindex);
             EvalT sdiff = objectives[obj].weight * diff * diff;
             objval += sdiff.val();
 
@@ -735,7 +738,8 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
 
               // Evaluate the response
               auto rdata = fman->evaluate(objectives[obj].name + " response", "point");
-              EvalT diff = rdata(0, 0) - objectives[obj].sensor_data(pt, tindex);
+              auto rval = rdata.getValueHost(0, 0);
+              EvalT diff = rval - sensor_data_host(pt, tindex);
               EvalT sdiff = objectives[obj].weight * diff * diff;
 
               auto poffs = params->paramoffsets;
@@ -1373,11 +1377,13 @@ void PostprocessManager<Node>::computeObjectiveGradState(const size_t &set,
     auto grad_tmp = linalg->getNewVector(set);
     auto grad_view = grad_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
 
+    auto sensor_times_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[obj].sensor_times);
+    auto sensor_points_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[obj].sensor_points);
+    auto sensor_data_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[obj].sensor_data);
     for (size_t pt = 0; pt < objectives[obj].numSensors; ++pt)
     {
       size_t tindex = 0;
       bool foundtime = false;
-      auto sensor_times_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[obj].sensor_times);
       for (size_type t = 0; t < sensor_times_host.extent(0); ++t)
       {
         if (std::abs(current_time - sensor_times_host(t)) < 1.0e-12)
@@ -1396,16 +1402,16 @@ void PostprocessManager<Node>::computeObjectiveGradState(const size_t &set,
         wset->isOnSide = true;
 
         auto x = wset->getScalarField("x");
-        x(0, 0) = objectives[obj].sensor_points(pt, 0);
+        Kokkos::deep_copy(Kokkos::subview(x, 0, 0), sensor_points_host(pt, 0));
         if (dimension > 1)
         {
           auto y = wset->getScalarField("y");
-          y(0, 0) = objectives[obj].sensor_points(pt, 1);
+          Kokkos::deep_copy(Kokkos::subview(y, 0, 0), sensor_points_host(pt, 1));
         }
         if (dimension > 2)
         {
           auto z = wset->getScalarField("z");
-          z(0, 0) = objectives[obj].sensor_points(pt, 2);
+          Kokkos::deep_copy(Kokkos::subview(z, 0, 0), sensor_points_host(pt, 2));
         }
 
         auto numDOF = assembler->groupData[block]->num_dof;
@@ -1502,7 +1508,8 @@ void PostprocessManager<Node>::computeObjectiveGradState(const size_t &set,
         wset->setSolutionGradPoint(ugrad_ip);
 
         auto rdata = fman->evaluate(objectives[obj].name + " response", "point");
-        EvalT diff = rdata(0, 0) - objectives[obj].sensor_data(pt, tindex);
+        auto rval = rdata.getValueHost(0, 0);
+        EvalT diff = rval - sensor_data_host(pt, tindex);
         EvalT totaldiff = objectives[obj].weight * diff * diff;
         for (size_type nn = 0; nn < numDOF.extent(0); nn++)
         {

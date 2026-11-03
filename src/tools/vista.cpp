@@ -92,6 +92,19 @@ template<class EvalT>
 View_Sc2 Vista<EvalT>::getDataSc() {
   return viewdata_Sc_;
 }
+
+template<class EvalT>
+EvalT Vista<EvalT>::getValueHost(const size_type & i0, const size_type & i1) {
+  if (is_view_ && !is_AD_) {
+    auto data_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), viewdata_Sc_);
+    return data_host(i0,i1);
+  }
+  auto data_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), viewdata_);
+  if (is_view_) {
+    return data_host(i0,i1);
+  }
+  return data_host(0,0);
+}
     
 // ========================================================================================
 // ========================================================================================
