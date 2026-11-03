@@ -685,6 +685,7 @@ void DiscretizationInterface::setBCData(const size_t & set, Teuchos::RCP<panzer:
             for( size_t i=0; i<side_output.size(); i++ ) {
               local_elem_Ids.push_back(mesh->getSTKElementLocalId(side_output[i]));
               size_t localid = localelemmap[local_elem_Ids[i]];
+              elemGIDs.clear();
               for (size_t k=0; k<dof_lids_host[set].extent(1); ++k) {
                 GO gid = dof_owned_and_shared[set](dof_lids_host[set](localid,k));
                 //GO gid = dof_owned_and_shared[set][dof_lids[set](localid,k)];
