@@ -219,6 +219,7 @@ void AssemblyManager<Node>::createGroups() {
           mesh->getSTKSideElements(blocknames[block], sideEntities, local_side_Ids, side_output);
           DRV sidenodes;
           mesh->getSTKElementVertices(side_output, blocknames[block], sidenodes);
+          auto sidenodes_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), sidenodes);
           
           size_t numSideElem = local_side_Ids.size();
           size_t belemProg = 0;
@@ -265,7 +266,7 @@ void AssemblyManager<Node>::createGroups() {
                   sideIndex = local_side_Ids[group[e+prog]];
                   for (size_type n=0; n<host_currnodes.extent(1); n++) {
                     for (size_type m=0; m<host_currnodes.extent(2); m++) {
-                      host_currnodes(e,n,m) = sidenodes(group[e+prog],n,m);
+                      host_currnodes(e,n,m) = sidenodes_host(group[e+prog],n,m);
                     }
                   }
                 }
