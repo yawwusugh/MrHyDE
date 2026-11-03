@@ -290,7 +290,7 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
         auto objsum_host = Kokkos::create_mirror_view(objsum_dev);
         Kokkos::deep_copy(objsum_host, objsum_dev);
         auto poffs = params->paramoffsets;
-        auto LIDs = assembler->groups[block][grp]->paramLIDs;
+        auto LIDs = assembler->groups[block][grp]->paramLIDs_host;
 
         for (size_t c = 0; c < assembler->groups[block][grp]->numElem; c++)
         {
@@ -812,7 +812,7 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
           auto regvals_sc_host = create_mirror_view(regvals_sc);
           deep_copy(regvals_sc_host, regvals_sc);
 
-          auto LIDs = assembler->groups[block][grp]->paramLIDs;
+          auto LIDs = assembler->groups[block][grp]->paramLIDs_host;
           auto poffs = params->paramoffsets;
           for (size_t elem = 0; elem < assembler->groups[block][grp]->numElem; ++elem)
           {
@@ -876,7 +876,7 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
             deep_copy(regvals_sc_host, regvals_sc);
 
             auto poffs = params->paramoffsets;
-            auto LIDs = assembler->boundary_groups[block][grp]->paramLIDs;
+            auto LIDs = assembler->boundary_groups[block][grp]->paramLIDs_host;
 
             for (size_t elem = 0; elem < assembler->boundary_groups[block][grp]->numElem; ++elem)
             {
