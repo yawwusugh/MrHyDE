@@ -866,7 +866,7 @@ void AssemblyManager<Node>::buildVolumetricDatabase(const size_t & block, vector
     //deep_copy(orientations_host, groups[block][refgrp]->orientation);
     //database_orientation_host(e) = orientations_host(refelem);
     
-    database_ids_host(e) = groups[block][refgrp]->localElemID(refelem);
+    Kokkos::deep_copy(Kokkos::subview(database_ids_host, e), Kokkos::subview(groups[block][refgrp]->localElemID, refelem));
     
     // Get the wts on the host
     View_Sc2 twts("temp physical wts",groups[block][refgrp]->numElem, database_wts.extent(1));
@@ -1254,7 +1254,7 @@ void AssemblyManager<Node>::buildBoundaryDatabase(const size_t & block, vector<s
     size_t refelem = first_boundary_users[e].second;
     
     Kokkos::View<LO*,AssemblyDevice> database_localID("tmp local elem id",1);
-    database_localID(0) = boundary_groups[block][refgrp]->localElemID(refelem);
+    Kokkos::deep_copy(Kokkos::subview(database_localID, 0), Kokkos::subview(boundary_groups[block][refgrp]->localElemID, refelem));
     
     // Boundary group localElemIDs are process-local (not block-local), so use the
     // nodes and orientations stored on the BoundaryGroup rather than looking them up by ID

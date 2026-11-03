@@ -546,11 +546,13 @@ void PostprocessManager<Node>::computeObjective(vector<vector_RCP> &current_soln
               deep_copy(regvals_sc_host, regvals);
               
               auto poffs = params->paramoffsets;
+              auto elemIDs_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(),
+                                                                      assembler->boundary_groups[block][grp]->localElemID);
               for (size_t elem = 0; elem < assembler->boundary_groups[block][grp]->numElem; ++elem)
               {
                 
                 vector<GO> paramGIDs;
-                params->paramDOF->getElementGIDs(assembler->boundary_groups[block][grp]->localElemID(elem),
+                params->paramDOF->getElementGIDs(elemIDs_host(elem),
                                                  paramGIDs, blocknames[block]);
                 
                 for (size_type pt = 0; pt < regvals_sc_host.extent(1); ++pt)
