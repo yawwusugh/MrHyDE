@@ -223,10 +223,7 @@ void PostprocessManager<Node>::importSensorsFromExodus(const int &objID)
       Kokkos::DynRankView<Intrepid2::Orientation, PHX::Device> corientation("curr orient", 1);
 
       DRV refpt_tmp = assembler->disc->mapPointsToReference(cpt, cids, block, assembler->groupData[block]->cell_topo);
-      for (size_type d = 0; d < refpt_tmp.extent(2); ++d)
-      {
-        refpt(0, d) = refpt_tmp(0, 0, d);
-      }
+      Kokkos::deep_copy(Kokkos::subview(refpt, 0, Kokkos::ALL()), Kokkos::subview(refpt_tmp, 0, 0, Kokkos::ALL()));
 
       auto orient = assembler->groups[block][sowners(pt, 0)]->orientation;
       corientation(0) = orient(sowners(pt, 1));
@@ -909,10 +906,7 @@ void PostprocessManager<Node>::computeSensorBasis(const int &objID)
 
     DRV refpt_tmp = assembler->disc->mapPointsToReference(cpt, cids, block, assembler->groupData[block]->cell_topo);
 
-    for (size_type d = 0; d < refpt_tmp.extent(2); ++d)
-    {
-      refpt(0, d) = refpt_tmp(0, 0, d);
-    }
+    Kokkos::deep_copy(Kokkos::subview(refpt, 0, Kokkos::ALL()), Kokkos::subview(refpt_tmp, 0, 0, Kokkos::ALL()));
 
     // auto orient = assembler->groups[block][sowners(pt,0)]->orientation;
     // corientation(0) = orient(sowners(pt,1));
