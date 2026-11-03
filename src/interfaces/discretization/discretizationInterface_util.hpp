@@ -191,9 +191,6 @@ Kokkos::DynRankView<int,PHX::Device> DiscretizationInterface::checkInclusionPhys
   
   CellTools::checkPointwiseInclusion(inRefCell, ref_pts, *cellTopo, tol);
   
-  if (!inRefCell(0,0)) {
-    //KokkosTools::print(ref_pts);
-  }
   return inRefCell;
 }
 
