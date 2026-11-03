@@ -603,10 +603,12 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
               auto u_dof_sv = subview(u_dof, var, ALL());
               auto ugrad_sv = subview(ugrad_ip, var, ALL());
               
-              parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, cbasis.extent(1)), MRHYDE_LAMBDA(const int dof) {
-                u_sv(0) += u_dof_sv(dof)*cbasis(pt,dof,0,0);
-                for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
-                  ugrad_sv(dim) += u_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+              parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, 1), MRHYDE_LAMBDA(const int) {
+                for (size_type dof=0; dof<cbasis.extent(1); dof++) {
+                  u_sv(0) += u_dof_sv(dof)*cbasis(pt,dof,0,0);
+                  for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
+                    ugrad_sv(dim) += u_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+                  }
                 } });
             }
             
@@ -643,7 +645,10 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
               auto p_sv = subview(p_ip, var, ALL());
               auto p_dof_sv = subview(p_dof, var, ALL());
 
-              parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, cbasis.extent(1)), MRHYDE_LAMBDA(const int dof) { p_sv(0) += p_dof_sv(dof) * cbasis(pt, dof, 0, 0); });
+              parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, 1), MRHYDE_LAMBDA(const int) {
+                for (size_type dof=0; dof<cbasis.extent(1); dof++) {
+                  p_sv(0) += p_dof_sv(dof) * cbasis(pt, dof, 0, 0);
+                } });
               wset->setParamPoint(p_ip);
 
               if (btype == "HGRAD")
@@ -652,9 +657,11 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
                 auto p_dof_sv = subview(p_dof, var, ALL());
                 auto pgrad_sv = subview(pgrad_ip, var, ALL());
 
-                parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, cbasis.extent(1)), MRHYDE_LAMBDA(const int dof) {
-                  for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
-                    pgrad_sv(dim) += p_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+                parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, 1), MRHYDE_LAMBDA(const int) {
+                  for (size_type dof=0; dof<cbasis.extent(1); dof++) {
+                    for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
+                      pgrad_sv(dim) += p_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+                    }
                   } });
                 wset->setParamGradPoint(pgrad_ip);
               }
@@ -719,7 +726,10 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
                 auto p_sv = subview(p_ip, var, ALL());
                 auto p_dof_sv = subview(p_dof, var, ALL());
 
-                parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, cbasis.extent(1)), MRHYDE_LAMBDA(const int dof) { p_sv(0) += p_dof_sv(dof) * cbasis(pt, dof, 0, 0); });
+                parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, 1), MRHYDE_LAMBDA(const int) {
+                  for (size_type dof=0; dof<cbasis.extent(1); dof++) {
+                    p_sv(0) += p_dof_sv(dof) * cbasis(pt, dof, 0, 0);
+                  } });
                 wset->setParamPoint(p_ip);
 
                 if (btype == "HGRAD")
@@ -728,9 +738,11 @@ DFAD PostprocessManager<Node>::computeObjectiveGradParam(const size_t &obj, vect
                   auto p_dof_sv = subview(p_dof, var, ALL());
                   auto pgrad_sv = subview(pgrad_ip, var, ALL());
 
-                  parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, cbasis.extent(1)), MRHYDE_LAMBDA(const int dof) {
-                    for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
-                      pgrad_sv(dim) += p_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+                  parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, 1), MRHYDE_LAMBDA(const int) {
+                    for (size_type dof=0; dof<cbasis.extent(1); dof++) {
+                      for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
+                        pgrad_sv(dim) += p_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+                      }
                     } });
                   wset->setParamGradPoint(pgrad_ip);
                 }
@@ -1444,10 +1456,12 @@ void PostprocessManager<Node>::computeObjectiveGradState(const size_t &set,
           auto u_dof_sv = subview(u_dof, var, ALL());
           auto ugrad_sv = subview(ugrad_ip, var, ALL());
 
-          parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, cbasis.extent(1)), MRHYDE_LAMBDA(const int dof) {
-            u_sv(0) += u_dof_sv(dof)*cbasis(pt,dof,0,0);
-            for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
-              ugrad_sv(dim) += u_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+          parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, 1), MRHYDE_LAMBDA(const int) {
+            for (size_type dof=0; dof<cbasis.extent(1); dof++) {
+              u_sv(0) += u_dof_sv(dof)*cbasis(pt,dof,0,0);
+              for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
+                ugrad_sv(dim) += u_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+              }
             } });
         }
 
@@ -1482,7 +1496,10 @@ void PostprocessManager<Node>::computeObjectiveGradState(const size_t &set,
             auto p_sv = subview(p_ip, var, ALL());
             auto p_dof_sv = subview(p_dof, var, ALL());
 
-            parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, cbasis.extent(1)), MRHYDE_LAMBDA(const int dof) { p_sv(0) += p_dof_sv(dof) * cbasis(pt, dof, 0, 0); });
+            parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, 1), MRHYDE_LAMBDA(const int) {
+              for (size_type dof=0; dof<cbasis.extent(1); dof++) {
+                p_sv(0) += p_dof_sv(dof) * cbasis(pt, dof, 0, 0);
+              } });
 
             if (btype == "HGRAD")
             {
@@ -1490,9 +1507,11 @@ void PostprocessManager<Node>::computeObjectiveGradState(const size_t &set,
               auto p_dof_sv = subview(p_dof, var, ALL());
               auto pgrad_sv = subview(pgrad_ip, var, ALL());
 
-              parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, cbasis.extent(1)), MRHYDE_LAMBDA(const int dof) {
-                for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
-                  pgrad_sv(dim) += p_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+              parallel_for("grp response sensor uip", RangePolicy<AssemblyExec>(0, 1), MRHYDE_LAMBDA(const int) {
+                for (size_type dof=0; dof<cbasis.extent(1); dof++) {
+                  for (size_t dim=0; dim<cbasis_grad.extent(3); dim++) {
+                    pgrad_sv(dim) += p_dof_sv(dof)*cbasis_grad(pt,dof,0,dim);
+                  }
                 } });
             }
           }
