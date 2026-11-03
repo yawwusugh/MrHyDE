@@ -187,8 +187,8 @@ namespace MrHyDE {
         if (branches_[0].is_view_) {
           if (branches_[0].is_parameter_) {
             int pind = branches_[0].param_index_;
-            auto pdata = branches_[0].param_data_;
-            EvalT pval = pdata(pind); // Yes, I know this won't work on a GPU
+            auto pdata = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), branches_[0].param_data_);
+            EvalT pval = pdata(pind);
             #ifndef MrHyDE_NO_AD
               vista_.update(pval);
             #else
