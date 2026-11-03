@@ -124,19 +124,19 @@ namespace MrHyDE {
                                                      const EvalT & drhoux_dy, const EvalT & drhoux_dz,
                                                      const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                      const EvalT & dux_dx, const EvalT & duy_dy, const EvalT & duz_dz,
-                                                     const EvalT & ndens, const EvalT & dT_dx);
+                                                     const EvalT & ndens, const EvalT & dT_dx) const;
     
     KOKKOS_FUNCTION EvalT computeStrongResidualRhouy(const EvalT & drhouy_dt, const EvalT & rhouy, const EvalT & drhouy_dx,
                                                      const EvalT & drhouy_dy, const EvalT & drhouy_dz,
                                                      const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                      const EvalT & dux_dx, const EvalT & duy_dy, const EvalT & duz_dz,
-                                                     const EvalT & ndens, const EvalT & dT_dy);
+                                                     const EvalT & ndens, const EvalT & dT_dy) const;
     
     KOKKOS_FUNCTION EvalT computeStrongResidualRhouz(const EvalT & drhouz_dt, const EvalT & rhouz, const EvalT & drhouz_dx,
                                                      const EvalT & drhouz_dy, const EvalT & drhouz_dz,
                                                      const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                      const EvalT & dux_dx, const EvalT & duy_dy, const EvalT & duz_dz,
-                                                     const EvalT & ndens, const EvalT & dT_dz);
+                                                     const EvalT & ndens, const EvalT & dT_dz) const;
     
     KOKKOS_FUNCTION EvalT computeStrongResidualT(const EvalT & dT_dt, const EvalT & T, const EvalT & dT_dx,
                                                  const EvalT & dT_dy, const EvalT & dT_dz,
@@ -150,7 +150,7 @@ namespace MrHyDE {
                                                  const EvalT & pi_yx, const EvalT & pi_yy, const EvalT & pi_yz,
                                                  const EvalT & pi_zx, const EvalT & pi_zy, const EvalT & pi_zz,
                                                  const EvalT & ndens, const EvalT & gamma_bar, const EvalT & Re,
-                                                 const EvalT & S);
+                                                 const EvalT & S) const;
     
     KOKKOS_FUNCTION EvalT computeStrongResidualBx(const EvalT & dBx_dt, const EvalT & Bx, const EvalT & dBx_dx,
                                                   const EvalT & dBx_dy, const EvalT & dBx_dz,
@@ -159,7 +159,7 @@ namespace MrHyDE {
                                                   const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                   const EvalT & dux_dx, const EvalT & dux_dy, const EvalT & dux_dz,
                                                   const EvalT & duy_dy, const EvalT & duz_dz,
-                                                  const EvalT & S, const EvalT & dpsi_dx);
+                                                  const EvalT & S, const EvalT & dpsi_dx) const;
     
     KOKKOS_FUNCTION EvalT computeStrongResidualBy(const EvalT & dBy_dt, const EvalT & By, const EvalT & dBy_dx,
                                                   const EvalT & dBy_dy, const EvalT & dBy_dz,
@@ -169,7 +169,7 @@ namespace MrHyDE {
                                                   const EvalT & dux_dx,
                                                   const EvalT & duy_dx, const EvalT & duy_dy, const EvalT & duy_dz,
                                                   const EvalT & duz_dz,
-                                                  const EvalT & S, const EvalT & dpsi_dy);
+                                                  const EvalT & S, const EvalT & dpsi_dy) const;
     
     KOKKOS_FUNCTION EvalT computeStrongResidualBz(const EvalT & dBz_dt, const EvalT & Bz, const EvalT & dBz_dx,
                                                   const EvalT & dBz_dy, const EvalT & dBz_dz,
@@ -178,9 +178,9 @@ namespace MrHyDE {
                                                   const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                   const EvalT & dux_dx, const EvalT & duy_dy,
                                                   const EvalT & duz_dx, const EvalT & duz_dy, const EvalT & duz_dz,
-                                                  const EvalT & S, const EvalT & dpsi_dz);
+                                                  const EvalT & S, const EvalT & dpsi_dz) const;
     
-    KOKKOS_FUNCTION EvalT computeStrongResidualPsi(const EvalT & dBx_dx, const EvalT & dBy_dy, const EvalT & dBz_dz);
+    KOKKOS_FUNCTION EvalT computeStrongResidualPsi(const EvalT & dBx_dx, const EvalT & dBy_dy, const EvalT & dBz_dz) const;
     
   private:
     

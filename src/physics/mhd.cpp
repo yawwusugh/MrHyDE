@@ -1142,7 +1142,7 @@ KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualRhoux(const EvalT & drhou
                                                              const EvalT & drhoux_dy, const EvalT & drhoux_dz,
                                                              const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                              const EvalT & dux_dx, const EvalT & duy_dy, const EvalT & duz_dz,
-                                                             const EvalT & ndens, const EvalT & dT_dx) {
+                                                             const EvalT & ndens, const EvalT & dT_dx) const {
   EvalT sres = drhoux_dt + (drhoux_dx*ux + rhoux*dux_dx + drhoux_dy*uy + rhoux*duy_dy + drhoux_dz*uz + rhoux*duz_dz) + ndens*dT_dx;
   // Missing approximations of the high-order terms
   return sres;
@@ -1153,7 +1153,7 @@ KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualRhouy(const EvalT & drhou
                                                              const EvalT & drhouy_dy, const EvalT & drhouy_dz,
                                                              const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                              const EvalT & dux_dx, const EvalT & duy_dy, const EvalT & duz_dz,
-                                                             const EvalT & ndens, const EvalT & dT_dy) {
+                                                             const EvalT & ndens, const EvalT & dT_dy) const {
   EvalT sres = drhouy_dt + (drhouy_dx*ux + rhouy*dux_dx + drhouy_dy*uy + rhouy*duy_dy + drhouy_dz*uz + rhouy*duz_dz) + ndens*dT_dy;
   // Missing approximations of the high-order terms
   return sres;
@@ -1164,7 +1164,7 @@ KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualRhouz(const EvalT & drhou
                                                              const EvalT & drhouz_dy, const EvalT & drhouz_dz,
                                                              const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                              const EvalT & dux_dx, const EvalT & duy_dy, const EvalT & duz_dz,
-                                                             const EvalT & ndens, const EvalT & dT_dz) {
+                                                             const EvalT & ndens, const EvalT & dT_dz) const {
   EvalT sres = drhouz_dt + (drhouz_dx*ux + rhouz*dux_dx + drhouz_dy*uy + rhouz*duy_dy + drhouz_dz*uz + rhouz*duz_dz) + ndens*dT_dz;
   // Missing approximations of the high-order terms
   return sres;
@@ -1183,7 +1183,7 @@ KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualT(const EvalT & dT_dt, co
                                                          const EvalT & pi_yx, const EvalT & pi_yy, const EvalT & pi_yz,
                                                          const EvalT & pi_zx, const EvalT & pi_zy, const EvalT & pi_zz,
                                                          const EvalT & ndens, const EvalT & gamma_bar, const EvalT & Re,
-                                                         const EvalT & S) {
+                                                         const EvalT & S) const {
   EvalT sres = ndens/gamma_bar*dT_dt + ndens/gamma_bar*(ux*dT_dx + uy*dT_dy + uz*dT_dz) + ndens*T*(dux_dx+duy_dy+duz_dz);
   // Not using q
   EvalT joule = 1.0/S*(jx*jx+jy*jy+jz*jz);
@@ -1199,7 +1199,7 @@ KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualBx(const EvalT & dBx_dt, 
                                                           const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                           const EvalT & dux_dx, const EvalT & dux_dy, const EvalT & dux_dz,
                                                           const EvalT & duy_dy, const EvalT & duz_dz,
-                                                          const EvalT & S, const EvalT & dpsi_dx) {
+                                                          const EvalT & S, const EvalT & dpsi_dx) const {
   EvalT sres = dBx_dt + dux_dx*Bx + ux*dBx_dx + dux_dy*By + ux*dBy_dy + dux_dz*Bz + ux*dBz_dz;
   sres += -1.0*(dBx_dx*ux + Bx*dux_dx + dBx_dy*uy + Bx*duy_dy + dBx_dz*uz + Bx*duz_dz) + dpsi_dx;
   // not using 1/S(nabla B - nabla B^T)
@@ -1215,7 +1215,7 @@ KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualBy(const EvalT & dBy_dt, 
                                                           const EvalT & dux_dx,
                                                           const EvalT & duy_dx, const EvalT & duy_dy, const EvalT & duy_dz,
                                                           const EvalT & duz_dz,
-                                                          const EvalT & S, const EvalT & dpsi_dy) {
+                                                          const EvalT & S, const EvalT & dpsi_dy) const {
   EvalT sres = dBy_dt + duy_dx*Bx + uy*dBx_dx + duy_dy*By + uy*dBy_dy + duy_dz*Bz + uy*dBz_dz;
   sres += -1.0*(dBy_dx*ux + By*dux_dx + dBy_dy*uy + By*duy_dy + dBy_dz*uz + By*duz_dz) + dpsi_dy;
   // not using 1/S(nabla B - nabla B^T)
@@ -1230,7 +1230,7 @@ KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualBz(const EvalT & dBz_dt, 
                                                           const EvalT & ux, const EvalT & uy, const EvalT & uz,
                                                           const EvalT & dux_dx, const EvalT & duy_dy,
                                                           const EvalT & duz_dx, const EvalT & duz_dy, const EvalT & duz_dz,
-                                                          const EvalT & S, const EvalT & dpsi_dz) {
+                                                          const EvalT & S, const EvalT & dpsi_dz) const {
   EvalT sres = dBz_dt + duz_dx*Bx + uz*dBx_dx + duz_dy*By + uz*dBy_dy + duz_dz*Bz + uz*dBz_dz;
   sres += -1.0*(dBz_dx*ux + Bz*dux_dx + dBz_dy*uy + Bz*duy_dy + dBz_dz*uz + Bz*duz_dz) + dpsi_dz;
   // not using 1/S(nabla B - nabla B^T)
@@ -1238,7 +1238,7 @@ KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualBz(const EvalT & dBz_dt, 
 }
 
 template<class EvalT>
-KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualPsi(const EvalT & dBx_dx, const EvalT & dBy_dy, const EvalT & dBz_dz) {
+KOKKOS_FUNCTION EvalT MHD<EvalT>::computeStrongResidualPsi(const EvalT & dBx_dx, const EvalT & dBy_dy, const EvalT & dBz_dz) const {
   EvalT sres = dBx_dx + dBy_dy + dBz_dz;
   return sres;
 }

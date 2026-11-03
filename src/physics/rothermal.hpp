@@ -143,8 +143,8 @@ namespace MrHyDE {
     // parameter list
     Teuchos::ParameterList rothermalSettings_;
 
-    // exodus reader
-    std::unique_ptr<ExoReader> exoReader_;
+    // exodus reader (shared so the object stays copyable for KOKKOS_CLASS_LAMBDA kernels)
+    std::shared_ptr<ExoReader> exoReader_;
 
     // ScalarT burnRate           = 1.0;
     // ScalarT burnCons           = 0.8514;
@@ -202,12 +202,12 @@ namespace MrHyDE {
     // ===============================
     // absolute value: this is used to compute the absolute value of a scalar
     // ===============================
-    KOKKOS_FUNCTION EvalT absoluteValue(const EvalT & x);
+    KOKKOS_FUNCTION EvalT absoluteValue(const EvalT & x) const;
 
     // ===============================
     // heaviside: this is used to compute the heaviside function of a scalar
     // ===============================
-    KOKKOS_FUNCTION EvalT heaviside(const EvalT & x);
+    KOKKOS_FUNCTION EvalT heaviside(const EvalT & x) const;
 
     // ===============================
     // compute base equations: these are the orginal base equations from Rothermal (1972)
@@ -216,7 +216,7 @@ namespace MrHyDE {
       const int elem,
       /* const size_type pt, */
       const View_Int1 & wksetIds
-    );
+    ) const;
 
     // ===============================
     // compute Rothermals: this returns ROS without wind/slope
@@ -224,7 +224,7 @@ namespace MrHyDE {
     KOKKOS_FUNCTION EvalT computeRothermals(
       const int elem,
       const View_Int1 & wksetIds
-    );
+    ) const;
 
   };
   

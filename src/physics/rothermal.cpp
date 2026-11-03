@@ -56,7 +56,7 @@ void rothermal<EvalT>::initParameterFields()
 {
 
     // read in parameter fields from exodus file
-    exoReader_ = std::make_unique<ExoReader>("mesh.exo");
+    exoReader_ = std::make_shared<ExoReader>("mesh.exo");
     exoReader_->open();
     exoReader_->computeGridAndDomain();
 
@@ -87,7 +87,7 @@ void rothermal<EvalT>::initParameterFields()
 template<class EvalT>
 KOKKOS_FUNCTION
 EvalT
-rothermal<EvalT>::absoluteValue(const EvalT & x)
+rothermal<EvalT>::absoluteValue(const EvalT & x) const
 {
     return sqrt(x * x + absoluteValueScale);
 }
@@ -98,7 +98,7 @@ rothermal<EvalT>::absoluteValue(const EvalT & x)
 template<class EvalT>
 KOKKOS_FUNCTION
 EvalT
-rothermal<EvalT>::heaviside(const EvalT & x)
+rothermal<EvalT>::heaviside(const EvalT & x) const
 {
     return 0.5 * (1.0 + tanh(x));
 }
@@ -250,7 +250,7 @@ typename rothermal<EvalT>::baseEquationsResult
 rothermal<EvalT>::computeBaseEquations(
     const int elem,
     const View_Int1 & wksetIds
-)
+) const
 {
     // output struct
     baseEquationsResult out;
@@ -292,7 +292,7 @@ EvalT
 rothermal<EvalT>::computeRothermals(
     const int elem,
     const View_Int1 & wksetIds
-)
+) const
 {
 
     // auto slope = distFields.slope(wksetIds(elem));
