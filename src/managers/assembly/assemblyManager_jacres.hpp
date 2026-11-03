@@ -617,7 +617,12 @@ void AssemblyManager<Node>::assembleJacRes(const size_t & set, const size_t & st
   }
   
   // Apply constraints, e.g., strongly imposed Dirichlet
+  // dofConstraints edits J through host methods, which Tpetra forbids while a device view is alive
+  J_kcrs = local_matrix();
   this->dofConstraints(set, J, res, current_time, compute_jacobian, compute_disc_sens);
+  if (compute_jacobian) {
+    J_kcrs = J->getLocalMatrixDevice();
+  }
   
   
   if (fix_zero_rows) {
