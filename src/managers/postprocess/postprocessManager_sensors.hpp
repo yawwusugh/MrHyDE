@@ -211,7 +211,8 @@ void PostprocessManager<Node>::importSensorsFromExodus(const int &objID)
       Kokkos::deep_copy(cpt_sub, pp_sub);
 
       Kokkos::View<LO *, AssemblyDevice> cids("current local elem ids", 1);
-      cids(0) = assembler->groups[block][sowners(pt, 0)]->localElemID(sowners(pt, 1));
+      Kokkos::deep_copy(Kokkos::subview(cids, 0),
+                        Kokkos::subview(assembler->groups[block][sowners(pt, 0)]->localElemID, sowners(pt, 1)));
       // auto nodes = mesh->getMyNodes(block, assembler->groups[block][sowners(pt,0)]->localElemID);
       // auto nodes_sv = subview(nodes,sowners(pt,1),ALL(),ALL());
       // DRV cnodes("subnodes",1,nodes.extent(1),nodes.extent(2));
@@ -895,7 +896,8 @@ void PostprocessManager<Node>::computeSensorBasis(const int &objID)
     Kokkos::deep_copy(cpt_sub, pp_sub);
 
     Kokkos::View<LO *, AssemblyDevice> cids("current local elemids", 1);
-    cids(0) = assembler->groups[block][sowners(pt, 0)]->localElemID(sowners(pt, 1));
+    Kokkos::deep_copy(Kokkos::subview(cids, 0),
+                      Kokkos::subview(assembler->groups[block][sowners(pt, 0)]->localElemID, sowners(pt, 1)));
     // auto nodes = mesh->getMyNodes(block, assembler->groups[block][sowners(pt,0)]->localElemID);
     // auto nodes_sv = subview(nodes,sowners(pt,1),ALL(),ALL());
     // DRV cnodes("subnodes",1,nodes.extent(1),nodes.extent(2));
@@ -1048,7 +1050,8 @@ void PostprocessManager<Node>::locateSensorPoints(const int & block,
             }
             deep_copy(phys_pt, phys_pt_host);
             Kokkos::View<LO *, AssemblyDevice> cids("current local elem ids", 1);
-            cids(0) = assembler->groups[block][grp]->localElemID(p);
+            Kokkos::deep_copy(Kokkos::subview(cids, 0),
+                              Kokkos::subview(assembler->groups[block][grp]->localElemID, p));
             // DRV cnodes("current nodes",1,nodes.extent(1), nodes.extent(2));
             // auto n_sub = subview(nodes,p,ALL(),ALL());
             // auto cn_sub = subview(cnodes,0,ALL(),ALL());
