@@ -193,7 +193,7 @@ typedef Kokkos::View<ScalarT*****,AssemblyDevice> View_Sc5;
 typedef Teuchos::RCP<const shards::CellTopology> topo_RCP;
 //typedef Teuchos::RCP<Intrepid2::Basis<PHX::Device::execution_space, double, double > > basis_RCP;
 
-typedef Teuchos::RCP<Intrepid2::Basis<HostDevice> > basis_RCP;
+typedef Teuchos::RCP<Intrepid2::Basis<AssemblyDevice> > basis_RCP;
 
 #include <exception>
 
