@@ -47,7 +47,7 @@ void AssemblyManager<Node>::setInitial(const size_t & set, vector_RCP & rhs, mat
   
   bool fix_zero_rows = true;
   
-  auto localMatrix = mass->getLocalMatrixHost();
+  auto localMatrix = mass->getLocalMatrixDevice();
   auto rhs_view = rhs->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
   bool lump_mass_ = lump_mass;
   
@@ -225,11 +225,10 @@ void AssemblyManager<Node>::setInitialFace(const size_t & set, vector_RCP & rhs,
   // TODO I don't think this can ever happen?
   // at least globally
   
-  typedef typename Node::execution_space LA_exec;
   size_t numrows = mass->getLocalNumRows();
   
   parallel_for("assembly insert Jac",
-               RangePolicy<LA_exec>(0,numrows),
+               RangePolicy<HostExec>(0,numrows),
                MRHYDE_LAMBDA (const size_t row ) {
     auto rowdata = localMatrix.row(row);
     ScalarT abssum = 0.0;
