@@ -219,9 +219,9 @@ void GroupMetaData::setSolutionFields(vector<int> & maxnumsteps, vector<int> & m
   }
   
   int maxnbasis = 0;
-  for (size_type i=0; i<num_param_dof.extent(0); i++) {
-    if (num_param_dof(i) > maxnbasis) {
-      maxnbasis = num_param_dof(i);
+  for (size_type i=0; i<num_param_dof_host.extent(0); i++) {
+    if (num_param_dof_host(i) > maxnbasis) {
+      maxnbasis = num_param_dof_host(i);
     }
   }
   param = View_Sc3("param", num_elem, num_param_dof.extent(0), maxnbasis);
