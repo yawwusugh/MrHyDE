@@ -1639,27 +1639,30 @@ void SolverManager<Node>::matrixFreePCG(const size_t & set, vector_RCP & b, vect
   r->update(-one,*q,one);
   
   // Fixed DOFs: zero r and M*p there, so the iteration only sees M_II and x keeps its fixed values
+  // Device views are taken only around the kernels that use them: Tpetra
+  // refuses host access (e.g. in an export) while a device view is alive.
   auto fixed = explicitFixedDOF[set];
-  auto r_view = r->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-  auto q_view = q->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-  parallel_for("PCG mask res",
-               RangePolicy<LA_exec>(0,r_view.extent(0)),
-               MRHYDE_LAMBDA (const int k ) {
-    if (fixed(k)) {
-      r_view(k,0) = 0.0;
-    }
-  });
+  {
+    auto r_view = r->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+    parallel_for("PCG mask res",
+                 RangePolicy<LA_exec>(0,r_view.extent(0)),
+                 MRHYDE_LAMBDA (const int k ) {
+      if (fixed(k)) {
+        r_view(k,0) = 0.0;
+      }
+    });
+  }
   
   r->norm2(rnorm);
   ScalarT r0 = rnorm[0];
-  
-  auto M_view = M->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-  auto z_view = z->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
   
   while (iter<maxiter && rnorm[0]/r0>tol) {
     
     {
       Teuchos::TimeMonitor localtimer(*PCGApplyPrectimer);
+      auto r_view = r->template getLocalView<LA_device>(Tpetra::Access::ReadOnly);
+      auto M_view = M->template getLocalView<LA_device>(Tpetra::Access::ReadOnly);
+      auto z_view = z->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
       parallel_for("PCG apply prec",
                    RangePolicy<LA_exec>(0,z_view.extent(0)),
                    MRHYDE_LAMBDA (const int k ) {
@@ -1688,6 +1691,7 @@ void SolverManager<Node>::matrixFreePCG(const size_t & set, vector_RCP & b, vect
       if (linalg->getHaveOverlapped()) {
         linalg->exportVectorFromOverlapped(set, q, q_over);
       }
+      auto q_view = q->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
       parallel_for("PCG mask Mp",
                    RangePolicy<LA_exec>(0,q_view.extent(0)),
                    MRHYDE_LAMBDA (const int k ) {
