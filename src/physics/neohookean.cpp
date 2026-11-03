@@ -194,7 +194,7 @@ void neohookean<EvalT>::volumeResidual() {
       auto basis_grad = wkset->basis_grad[dx_basis];
       auto off = Kokkos::subview( wkset->offsets, dx_num, Kokkos::ALL());
       
-      size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+      size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
       
       parallel_for("NH ux volume resid 3D",
                    TeamPolicy<AssemblyExec>(wkset->numElem, teamSize, VECTORSIZE),
@@ -215,7 +215,7 @@ void neohookean<EvalT>::volumeResidual() {
       auto basis_grad = wkset->basis_grad[dy_basis];
       auto off = Kokkos::subview( wkset->offsets, dy_num, Kokkos::ALL());
       
-      size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+      size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
       
       parallel_for("NH uy volume resid 3D",
                    TeamPolicy<AssemblyExec>(wkset->numElem, teamSize, VECTORSIZE),
@@ -236,7 +236,7 @@ void neohookean<EvalT>::volumeResidual() {
       auto basis_grad = wkset->basis_grad[dz_basis];
       auto off = Kokkos::subview( wkset->offsets, dz_num, Kokkos::ALL());
       
-      size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+      size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
       
       parallel_for("NH uz volume resid 3D",
                    TeamPolicy<AssemblyExec>(wkset->numElem, teamSize, VECTORSIZE),

@@ -119,7 +119,7 @@ void thermal<EvalT>::volumeResidual() {
     Uy = wkset->getSolutionField("uy");
     Uz = wkset->getSolutionField("uz");
   }
-  size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+  size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
   
   
   parallel_for("Thermal volume resid 3D part 1",

@@ -241,7 +241,7 @@ void elastodynamics<EvalT>::volumeResidual() {
       auto basis_grad = wkset->basis_grad[dx_basis];
       auto off = Kokkos::subview( wkset->offsets, dx_num, Kokkos::ALL());
       auto dvxdt = wkset->getSolutionField("vx_t");
-      size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+      size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
       
       parallel_for("LE ux volume resid 3D",
                    TeamPolicy<AssemblyExec>(wkset->numElem, teamSize, VECTORSIZE),
@@ -262,7 +262,7 @@ void elastodynamics<EvalT>::volumeResidual() {
       auto basis_grad = wkset->basis_grad[dy_basis];
       auto off = Kokkos::subview( wkset->offsets, dy_num, Kokkos::ALL());
       auto dvydt = wkset->getSolutionField("vy_t");
-      size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+      size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
       
       parallel_for("LE uy volume resid 3D",
                    TeamPolicy<AssemblyExec>(wkset->numElem, teamSize, VECTORSIZE),
@@ -283,7 +283,7 @@ void elastodynamics<EvalT>::volumeResidual() {
       auto basis_grad = wkset->basis_grad[dz_basis];
       auto off = Kokkos::subview( wkset->offsets, dz_num, Kokkos::ALL());
       auto dvzdt = wkset->getSolutionField("vz_t");
-      size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+      size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
       
       parallel_for("LE uz volume resid 3D",
                    TeamPolicy<AssemblyExec>(wkset->numElem, teamSize, VECTORSIZE),

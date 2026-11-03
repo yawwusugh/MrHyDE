@@ -1543,7 +1543,7 @@ void Workset<EvalT>::evaluateSolutionField(const int & fieldnum) {
       }
       else {
         auto sbasis = basis_div[basis_id];
-        size_t teamSize = std::min(maxTeamSize,sbasis.extent(2));
+        size_t teamSize = std::min<size_t>(maxTeamSize,sbasis.extent(2));
         
         parallel_for("wkset soln ip HGRAD",
                      TeamPolicy<AssemblyExec>(sbasis.extent(0), teamSize, VECTORSIZE),
@@ -1587,7 +1587,7 @@ void Workset<EvalT>::evaluateSolutionField(const int & fieldnum) {
         }
       }
       
-      size_t teamSize = std::min(maxTeamSize,sbasis.extent(2));
+      size_t teamSize = std::min<size_t>(maxTeamSize,sbasis.extent(2));
       size_type basis_dim = sbasis.extent(3);
       
       if (component >= basis_dim) {
@@ -1742,7 +1742,7 @@ void Workset<EvalT>::evaluateSideSolutionField(const int & fieldnum) {
     
     if (side_soln_fields[fieldnum].derivative_type_ == "div") {
       auto sbasis = basis_div[basis_id];
-      size_t teamSize = std::min(maxTeamSize,sbasis.extent(2));
+      size_t teamSize = std::min<size_t>(maxTeamSize,sbasis.extent(2));
       
       parallel_for("wkset soln ip HGRAD",
                    TeamPolicy<AssemblyExec>(sbasis.extent(0), teamSize, VECTORSIZE),
@@ -1768,7 +1768,7 @@ void Workset<EvalT>::evaluateSideSolutionField(const int & fieldnum) {
         cbasis = basis_side[basis_id];
       }
       
-      size_t teamSize = std::min(maxTeamSize,cbasis.extent(2));
+      size_t teamSize = std::min<size_t>(maxTeamSize,cbasis.extent(2));
       size_type basis_dim = cbasis.extent(3);
       
       if (component >= basis_dim) {

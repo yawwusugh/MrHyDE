@@ -147,7 +147,7 @@ void VFP0d2v<EvalT>::volumeResidual() {
         auto dHdv1 = wkset->getSolutionField("grad(H)[x]");
         auto dHdv2 = wkset->getSolutionField("grad(H)[y]");
         
-        size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+        size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
         
         
         parallel_for("VFP 0d2v H residual",
@@ -212,7 +212,7 @@ void VFP0d2v<EvalT>::volumeResidual() {
         auto dCdv1 = wkset->getSolutionField("grad(C)[x]");
         auto dCdv2 = wkset->getSolutionField("grad(C)[y]");
         
-        size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+        size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
         
         
         parallel_for("Thermal volume resid 3D part 1",
@@ -257,7 +257,7 @@ void VFP0d2v<EvalT>::volumeResidual() {
         auto dGdv1 = wkset->getSolutionField("grad(G)[x]");
         auto dGdv2 = wkset->getSolutionField("grad(G)[y]");
         
-        size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+        size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
         
         
         parallel_for("Thermal volume resid 3D part 1",
@@ -302,7 +302,7 @@ void VFP0d2v<EvalT>::volumeResidual() {
         auto dHdv1 = wkset->getSolutionField("grad(H)[x]");
         auto dHdv2 = wkset->getSolutionField("grad(H)[y]");
         
-        size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+        size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
         
         
         parallel_for("Thermal volume resid 3D part 1",

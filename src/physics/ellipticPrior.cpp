@@ -89,7 +89,7 @@ void ellipticPrior<EvalT>::volumeResidual() {
   auto dTdy = wkset->getSolutionField("grad(T)[y]"); //dedy_vol;
   auto dTdz = wkset->getSolutionField("grad(T)[z]"); //dedz_vol;
   
-  size_t teamSize = std::min(wkset->maxTeamSize,basis.extent(1));
+  size_t teamSize = std::min<size_t>(wkset->maxTeamSize,basis.extent(1));
   
   parallel_for("ellipticPrior volume resid 3D part 1",
                TeamPolicy<AssemblyExec>(wkset->numElem, teamSize, VECTORSIZE),
