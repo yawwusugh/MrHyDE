@@ -155,6 +155,7 @@ void AssemblyManager<Node>::computeConstraintProjection(const size_t & set, vect
   //           Will take a fair bit of work to generalize to all cases
   
   auto localMatrix = mass->getLocalMatrixHost();
+  auto isFixed_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), isFixedDOF[set]);
   
   for (size_t block=0; block<boundary_groups.size(); ++block) {
     //wkset[block]->setTime(time);
@@ -175,7 +176,7 @@ void AssemblyManager<Node>::computeConstraintProjection(const size_t & set, vect
       for (int c=0; c<numElem; c++) {
         for( size_t row=0; row<LIDs.extent(1); row++ ) {
           LO rowIndex = LIDs(c,row);
-          if (isFixedDOF[set](rowIndex)) {
+          if (isFixed_host(rowIndex)) {
             ScalarT val = host_rhs(c,row);
             rhs->sumIntoLocalValue(rowIndex,0, val);
             if (lumpmass) {
@@ -215,7 +216,7 @@ void AssemblyManager<Node>::computeConstraintProjection(const size_t & set, vect
       for (size_t c=0; c<groups[block][grp]->numElem; c++) {
         for( size_type row=0; row<LIDs.extent(1); row++ ) {
           LO rowIndex = LIDs(c,row);
-          if (!isFixedDOF[set](rowIndex)) {
+          if (!isFixed_host(rowIndex)) {
             ScalarT vals[1];
             LO cols[1];
             vals[0] = 1.0;
