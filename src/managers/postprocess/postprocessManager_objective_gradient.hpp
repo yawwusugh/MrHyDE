@@ -1543,7 +1543,6 @@ void PostprocessManager<Node>::computeSensitivities(vector<vector_RCP> &u,
   Teuchos::TimeMonitor localtimer(*computeGradientTimer);
   debugger->print(1, "******** Starting PostprocessManager::computeSensitivities ...");
 
-  typedef typename Node::device_type LA_device;
   typedef Tpetra::CrsMatrix<ScalarT, LO, GO, Node> LA_CrsMatrix;
   typedef Teuchos::RCP<LA_CrsMatrix> matrix_RCP;
 
@@ -1656,14 +1655,15 @@ void PostprocessManager<Node>::computeSensitivities(vector<vector_RCP> &u,
     curr_grad->update(1.0, *sens, 1.0);
 
     vector_RCP sens_over = linalg->getNewOverlappedParamVector();
-    auto sens_kv = sens_over->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-    
-    for (size_t i = 0; i < params->paramOwnedAndShared.size(); i++) {
-      ScalarT cobj = 0.0;
-      if ((int)(i + params->num_active_params) < obj_sens.size()) {
-        cobj = obj_sens.fastAccessDx(i + params->num_active_params);
+    {
+      auto sens_kv = sens_over->getLocalViewHost(Tpetra::Access::ReadWrite);
+      for (size_t i = 0; i < params->paramOwnedAndShared.size(); i++) {
+        ScalarT cobj = 0.0;
+        if ((int)(i + params->num_active_params) < obj_sens.size()) {
+          cobj = obj_sens.fastAccessDx(i + params->num_active_params);
+        }
+        sens_kv(i, 0) += cobj;
       }
-      sens_kv(i, 0) += cobj;
     }
     
     vector_RCP sensr = linalg->getNewParamVector();
