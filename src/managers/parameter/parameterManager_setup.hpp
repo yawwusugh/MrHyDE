@@ -314,13 +314,13 @@ void ParameterManager<Node>::setupDiscretizedParameters(vector<vector<Teuchos::R
       if (groups[block].size() > 0) {
         int numLocalDOF = 0;
         Kokkos::View<LO*,AssemblyDevice> numDOF_KV("number of param DOF per variable",num_discretized_params);
+        Kokkos::View<LO*,HostDevice> numDOF_host("numDOF on host",num_discretized_params);
         for (size_t k=0; k<num_discretized_params; k++) {
-          numDOF_KV(k) = paramNumBasis[k];
+          numDOF_host(k) = paramNumBasis[k];
           numLocalDOF += paramNumBasis[k];
         }
+        Kokkos::deep_copy(numDOF_KV, numDOF_host);
         groups[block][0]->group_data->num_param_dof = numDOF_KV;
-        Kokkos::View<LO*,HostDevice> numDOF_host("numDOF on host",num_discretized_params);
-        Kokkos::deep_copy(numDOF_host, numDOF_KV);
         groups[block][0]->group_data->num_param_dof_host = numDOF_host;
         
         auto myElem = disc->my_elements[block];
