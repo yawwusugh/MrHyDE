@@ -375,45 +375,20 @@ void Group::computePhaseBasis(const bool & keepnodes) {
 ///////////////////////////////////////////////////////////////////////////////////////
 
 void Group::createHostLIDs() {
-  
-  bool data_avail = false;
-  if (Kokkos::SpaceAccessibility<HostExec, AssemblyDevice::memory_space>::accessible) {
-    data_avail = true;
-  }
-  
+
   LIDs_host = vector<LIDView_host>(LIDs.size());
   for (size_t set=0; set<LIDs.size(); ++set) {
-    if (data_avail) {
-      LIDs_host[set] = LIDs[set];
-    }
-    else {
-      auto LIDs_tmp = create_mirror_view(LIDs[set]);
-      deep_copy(LIDs_tmp,LIDs[set]);
-      
-      LIDView_host currLIDs_host("LIDs on host",LIDs[set].extent(0), LIDs[set].extent(1));
-      deep_copy(currLIDs_host,LIDs_tmp);
-      LIDs_host[set] = currLIDs_host;
-    }
+    LIDs_host[set] = KokkosTools::getHostLIDs(LIDs[set]);
   }
-  
+
   if (group_data->phase_dimension > 0) {
     phase_LIDs_host = vector<LIDView_host>(phase_LIDs.size());
     for (size_t set=0; set<LIDs.size(); ++set) {
-      if (data_avail) {
-        phase_LIDs_host[set] = phase_LIDs[set];
-      }
-      else {
-        auto LIDs_tmp = create_mirror_view(phase_LIDs[set]);
-        deep_copy(LIDs_tmp,phase_LIDs[set]);
-        
-        LIDView_host currLIDs_host("LIDs on host",phase_LIDs[set].extent(0), phase_LIDs[set].extent(1));
-        deep_copy(currLIDs_host,LIDs_tmp);
-        phase_LIDs_host[set] = currLIDs_host;
-      }
+      phase_LIDs_host[set] = KokkosTools::getHostLIDs(phase_LIDs[set]);
     }
-    
+
   }
-  
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////

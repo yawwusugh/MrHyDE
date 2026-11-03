@@ -220,23 +220,10 @@ void BoundaryGroup::computePhaseBasis(const bool & keepnodes) {
 ///////////////////////////////////////////////////////////////////////////////////////
 
 void BoundaryGroup::createHostLIDs() {
-  bool data_avail = false;
-  if (Kokkos::SpaceAccessibility<HostExec, AssemblyDevice::memory_space>::accessible) {
-    data_avail = true;
-  }
-  
+
   LIDs_host = vector<LIDView_host>(LIDs.size());
   for (size_t set=0; set<LIDs.size(); ++set) {
-    if (data_avail) {
-      LIDs_host[set] = LIDs[set];
-    }
-    else {
-      auto LIDs_tmp = Kokkos::create_mirror_view(LIDs[set]);
-      Kokkos::deep_copy(LIDs_tmp,LIDs[set]);
-      LIDView_host currLIDs_host("LIDs on host",LIDs[set].extent(0), LIDs[set].extent(1));
-      Kokkos::deep_copy(currLIDs_host,LIDs_tmp);
-      LIDs_host[set] = currLIDs_host;
-    }
+    LIDs_host[set] = KokkosTools::getHostLIDs(LIDs[set]);
   }
   
 }

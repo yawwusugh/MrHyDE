@@ -669,9 +669,29 @@ namespace MrHyDE {
         }
       }
     }
-        
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Host view of a LID list: the same view when the host can access its memory,
+    // otherwise a copy in the host layout.  The branch is resolved at compile time
+    // inside a template, so the one that does not apply to this build is never compiled.
+    ////////////////////////////////////////////////////////////////////////////////
+
+    template<class ViewType>
+    static LIDView_host getHostLIDs(const ViewType & lids) {
+      if constexpr (Kokkos::SpaceAccessibility<HostExec, typename ViewType::memory_space>::accessible) {
+        return lids;
+      }
+      else {
+        auto lids_mirror = Kokkos::create_mirror_view(lids);
+        Kokkos::deep_copy(lids_mirror,lids);
+        LIDView_host lids_host("LIDs on host",lids.extent(0), lids.extent(1));
+        Kokkos::deep_copy(lids_host,lids_mirror);
+        return lids_host;
+      }
+    }
+
   };
-  
+
 }
 
 #endif
