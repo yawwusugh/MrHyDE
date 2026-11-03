@@ -1769,6 +1769,9 @@ void PostprocessManager<Node>::addEnergyObjectiveGradState(const size_t & set, v
     if (objectives[r].type == "integrated control" && objectives[r].weight != 0.0) {
 
       size_t block = objectives[r].block;
+      if (assembler->groups[block].size() == 0) { // no elements of this block on this rank
+        continue;
+      }
       auto wset = assembler->wkset[block];
       TEUCHOS_TEST_FOR_EXCEPTION(wset->set_varlist[set].size() != 1, std::runtime_error,
                                  "Error: addEnergyObjectiveGradState requires one variable in the physics set.");
@@ -1990,6 +1993,9 @@ void PostprocessManager<Node>::addRegularizationGradParam(vector_RCP & p_over, c
       }
 
       size_t block = objectives[r].block;
+      if (assembler->groups[block].size() == 0) { // no elements of this block on this rank
+        continue;
+      }
       auto wset = assembler->wkset[block];
       int pb = wset->paramusebasis[0];
 
@@ -2049,6 +2055,9 @@ void PostprocessManager<Node>::addRegularizationGradParam(vector_RCP & p_over, c
   auto g_vec = Kokkos::subview(g_kv, Kokkos::ALL(), 0);
 
   for (size_t r = 0; r < reg_elem_mats.size(); ++r) {
+    if (reg_elem_mats[r].size() == 0) { // no regularization, or no elements of this block on this rank
+      continue;
+    }
     size_t block = objectives[r].block;
     auto poff = Kokkos::subview(assembler->wkset[block]->paramoffsets, 0, Kokkos::ALL());
 

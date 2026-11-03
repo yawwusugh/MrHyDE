@@ -1044,11 +1044,15 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
                              "Error: the explicit adjoint requires a 3D mesh (the 2D maxwell residual is not scaled by 1/eps).");
   TEUCHOS_TEST_FOR_EXCEPTION(setnames.size() != 2, std::runtime_error,
                              "Error: the explicit adjoint requires exactly two physics sets (E, B).");
-  {
-    auto & vlist = assembler->wkset[0]->set_varlist;
-    bool varsok = (vlist[0].size() == 1 && vlist[0][0] == "E" && vlist[1].size() == 1 && vlist[1][0] == "B");
-    TEUCHOS_TEST_FOR_EXCEPTION(!varsok, std::runtime_error,
-                               "Error: the explicit adjoint requires set 0 = {E} and set 1 = {B}.");
+  // Blocks with no elements on this rank only have a placeholder workset, which holds no variables or BCs
+  for (size_t block=0; block<assembler->wkset.size(); ++block) {
+    if (assembler->wkset[block]->isInitialized) {
+      auto & vlist = assembler->wkset[block]->set_varlist;
+      bool varsok = (vlist[0].size() == 1 && vlist[0][0] == "E" && vlist[1].size() == 1 && vlist[1][0] == "B");
+      TEUCHOS_TEST_FOR_EXCEPTION(!varsok, std::runtime_error,
+                                 "Error: the explicit adjoint requires set 0 = {E} and set 1 = {B}.");
+      break;
+    }
   }
   for (size_t set=0; set<setnames.size(); ++set) {
     TEUCHOS_TEST_FOR_EXCEPTION(numstages[set] != 1 || maxnumstages[set] != 1, std::runtime_error,
@@ -1059,6 +1063,9 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
                                "Error: the explicit adjoint requires an explicit stage (Butcher A(0,0) = 0).");
   }
   for (size_t block=0; block<assembler->wkset.size(); ++block) {
+    if (!assembler->wkset[block]->isInitialized) {
+      continue;
+    }
     auto bcs = assembler->wkset[block]->set_var_bcs[1];
     for (size_type i=0; i<bcs.extent(0); ++i) {
       for (size_type j=0; j<bcs.extent(1); ++j) {
