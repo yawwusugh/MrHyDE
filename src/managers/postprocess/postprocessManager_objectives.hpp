@@ -312,9 +312,10 @@ void PostprocessManager<Node>::computeObjective(vector<vector_RCP> &current_soln
         {
           size_t tindex = 0;
           bool foundtime = false;
-          for (size_type t = 0; t < objectives[r].sensor_times.extent(0); ++t)
+          auto sensor_times_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), objectives[r].sensor_times);
+          for (size_type t = 0; t < sensor_times_host.extent(0); ++t)
           {
-            if (std::abs(current_time - objectives[r].sensor_times(t)) < 1.0e-12)
+            if (std::abs(current_time - sensor_times_host(t)) < 1.0e-12)
             {
               foundtime = true;
               tindex = t;
