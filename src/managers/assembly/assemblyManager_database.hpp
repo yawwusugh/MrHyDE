@@ -235,7 +235,7 @@ void AssemblyManager<Node>::identifyVolumetricDatabase(const size_t & block, vec
         for (size_type pt=0; pt<new_jac.extent(0); ++pt) {
           for (size_type d0=0; d0<new_jac.extent(1); ++d0) {
             for (size_type d1=0; d1<new_jac.extent(2); ++d1) {
-              new_jac(pt,d0,d1) = jacobian(e,pt,d0,d1);
+              new_jac(pt,d0,d1) = jacobian_host(e,pt,d0,d1);
             }
           }
         }
@@ -389,7 +389,7 @@ void AssemblyManager<Node>::identifyBoundaryDatabase(const size_t & block, vecto
         for (size_type pt=0; pt<new_jac.extent(0); ++pt) {
           for (size_type d0=0; d0<new_jac.extent(1); ++d0) {
             for (size_type d1=0; d1<new_jac.extent(2); ++d1) {
-              new_jac(pt,d0,d1) = jacobian(e,pt,d0,d1);
+              new_jac(pt,d0,d1) = jacobian_host(e,pt,d0,d1);
               jnorm += std::abs(jacobian(e,pt,d0,d1));
             }
           }
@@ -552,7 +552,7 @@ void AssemblyManager<Node>::identifyPhaseVolumetricDatabase(const size_t & block
       for (size_type pt=0; pt<new_jac.extent(0); ++pt) {
         for (size_type d0=0; d0<new_jac.extent(1); ++d0) {
           for (size_type d1=0; d1<new_jac.extent(2); ++d1) {
-            new_jac(pt,d0,d1) = jacobian(e,pt,d0,d1);
+            new_jac(pt,d0,d1) = jacobian_host(e,pt,d0,d1);
           }
         }
       }
