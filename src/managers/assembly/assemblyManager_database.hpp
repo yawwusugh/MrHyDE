@@ -390,7 +390,7 @@ void AssemblyManager<Node>::identifyBoundaryDatabase(const size_t & block, vecto
           for (size_type d0=0; d0<new_jac.extent(1); ++d0) {
             for (size_type d1=0; d1<new_jac.extent(2); ++d1) {
               new_jac(pt,d0,d1) = jacobian_host(e,pt,d0,d1);
-              jnorm += std::abs(jacobian(e,pt,d0,d1));
+              jnorm += std::abs(jacobian_host(e,pt,d0,d1));
             }
           }
         }
@@ -1611,9 +1611,11 @@ void AssemblyManager<Node>::writeVolumetricData(const size_t & block, vector<vec
     
     DRV fro("fro norm of J", groups[block][grp]->numElem);
     disc->getFrobenius(groupData[block], jacobian, fro);
+    auto jacobian_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), jacobian);
+    auto measure_host = Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), measure);
     vector<ScalarT> currmeas;
-    for (size_type e=0; e<measure.extent(0); ++e) {
-      currmeas.push_back(measure(e));
+    for (size_type e=0; e<measure_host.extent(0); ++e) {
+      currmeas.push_back(measure_host(e));
       //currmeas.push_back(jacobian(e,0,0,0));
     }
     all_meas.push_back(currmeas);
@@ -1625,7 +1627,7 @@ void AssemblyManager<Node>::writeVolumetricData(const size_t & block, vector<vec
       for (size_type d1=0; d1<jacobian.extent(2); ++d1) {
         for (size_type d2=0; d2<jacobian.extent(3); ++d2) {
           for (size_type pt=0; pt<jacobian.extent(1); ++pt) {
-            ScalarT cval = jacobian(e,pt,d1,d2) - jacobian(e,pt,d2,d1);
+            ScalarT cval = jacobian_host(e,pt,d1,d2) - jacobian_host(e,pt,d2,d1);
             val += cval*cval;
           }
         }
