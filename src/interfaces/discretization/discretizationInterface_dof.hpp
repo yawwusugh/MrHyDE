@@ -68,7 +68,8 @@ void DiscretizationInterface::buildDOFManagers() {
     Kokkos::View<const LO**, Kokkos::LayoutRight, PHX::Device> setLIDs = setDOF->getLIDs();
     
     dof_lids.push_back(setLIDs);
-        
+    dof_lids_host.push_back(Kokkos::create_mirror_view_and_copy(HostDevice::memory_space(), setLIDs));
+
     {
       vector<GO> owned;
       setDOF->getOwnedIndices(owned);
@@ -217,7 +218,10 @@ void DiscretizationInterface::buildSimpleDOFManagers() {
   
   dof_owned_and_shared.push_back(owned_shared);
   
-  dof_lids.push_back(mesh->simple_mesh->getCellToNodeMap()); // [set](elem, dof)
+  // The simple mesh keeps its connectivity on the host; dof_lids lives on the device
+  LIDView_host cell_nodes = mesh->simple_mesh->getCellToNodeMap();
+  dof_lids_host.push_back(cell_nodes);
+  dof_lids.push_back(Kokkos::create_mirror_view_and_copy(PHX::Device::memory_space(), cell_nodes)); // [set](elem, dof)
   
   for (size_t set=0; set<physics->set_names.size(); ++set) {
     vector<vector<string> > varlist = physics->var_list[set];
@@ -412,7 +416,9 @@ void DiscretizationInterface::buildPhaseDOFManagers() {
 
 void DiscretizationInterface::buildSimplePhaseDOFManagers() {
   
-  phase_dof_lids.push_back(mesh->phase_mesh->getCellToNodeMap()); // [set](elem, dof)
+  LIDView_host phase_cell_nodes = mesh->phase_mesh->getCellToNodeMap();
+  phase_dof_lids_host.push_back(phase_cell_nodes);
+  phase_dof_lids.push_back(Kokkos::create_mirror_view_and_copy(PHX::Device::memory_space(), phase_cell_nodes)); // [set](elem, dof)
   
   size_t num_owned = mesh->phase_mesh->getNumNodes();
   
@@ -679,8 +685,8 @@ void DiscretizationInterface::setBCData(const size_t & set, Teuchos::RCP<panzer:
             for( size_t i=0; i<side_output.size(); i++ ) {
               local_elem_Ids.push_back(mesh->getSTKElementLocalId(side_output[i]));
               size_t localid = localelemmap[local_elem_Ids[i]];
-              for (size_t k=0; k<dof_lids[set].extent(1); ++k) {
-                GO gid = dof_owned_and_shared[set](dof_lids[set](localid,k));
+              for (size_t k=0; k<dof_lids_host[set].extent(1); ++k) {
+                GO gid = dof_owned_and_shared[set](dof_lids_host[set](localid,k));
                 //GO gid = dof_owned_and_shared[set][dof_lids[set](localid,k)];
                 elemGIDs.push_back(gid);
                 //elemGIDs.push_back(dof_gids[set](localid,k));
@@ -1002,7 +1008,7 @@ vector<vector<int> > DiscretizationInterface::getOffsets(const int & set, const 
 vector<GO> DiscretizationInterface::getGIDs(const size_t & set, const size_t & block, const size_t & elem) {
   vector<GO> gids;
   for (size_t k=0; k<num_dof[set][block]; ++k) {
-    GO gid = dof_owned_and_shared[set](dof_lids[set](elem,k));
+    GO gid = dof_owned_and_shared[set](dof_lids_host[set](elem,k));
     gids.push_back(gid);
   }
   return gids;
@@ -1025,9 +1031,9 @@ vector<GO> DiscretizationInterface::getPhaseGIDs(const size_t & set, const size_
 
 vector<LO> DiscretizationInterface::getPhaseLIDs(const size_t & set, const size_t & pelem) {
   vector<LO> lids;
-  int num_phase_local_dof = phase_dof_lids[set].extent(1);
+  int num_phase_local_dof = phase_dof_lids_host[set].extent(1);
   for (int j=0; j<num_phase_local_dof; j++) {
-    lids.push_back(phase_dof_lids[set](pelem,j));
+    lids.push_back(phase_dof_lids_host[set](pelem,j));
   }
   return lids;
 }

@@ -241,6 +241,8 @@ LO DiscretizationInterface::getNumPhaseDOFs(const int & set) {
 void DiscretizationInterface::purgeLIDs() {
   dof_lids.clear();
   phase_dof_lids.clear();
+  dof_lids_host.clear();
+  phase_dof_lids_host.clear();
 }
 
 // ========================================================================================

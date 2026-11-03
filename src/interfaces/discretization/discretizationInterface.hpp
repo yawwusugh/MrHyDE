@@ -900,6 +900,8 @@ public:
   // Purgeable
   typedef Kokkos::View<const LO**, Kokkos::LayoutRight, PHX::Device> lids_view_t;
   std::vector<lids_view_t> dof_lids, phase_dof_lids; /**< Local ID lists for DOFs, purgeable. */
+  typedef Kokkos::View<const LO**, Kokkos::LayoutRight, HostDevice> lids_host_view_t;
+  std::vector<lids_host_view_t> dof_lids_host, phase_dof_lids_host; /**< Host copies of dof_lids and phase_dof_lids for host-side lookups (same views when the device is the host), purgeable. */
   std::vector<Kokkos::View<GO*,HostDevice>> dof_owned; /**< Owned DOF global IDs. */
   std::vector<Kokkos::View<GO*,HostDevice>> dof_owned_and_shared; /**< Owned + shared DOF global IDs. */
   Kokkos::View<Intrepid2::Orientation*,HostDevice> panzer_orientations, phase_panzer_orientations; /**< Orientation data for basis functions. */
