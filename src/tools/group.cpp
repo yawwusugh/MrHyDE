@@ -397,8 +397,10 @@ void Group::createHostLIDs() {
 void Group::setParams(LIDView paramLIDs_) {
   
   paramLIDs = paramLIDs_;
-  paramLIDs_host = LIDView_host("param LIDs on host", paramLIDs.extent(0), paramLIDs.extent(1));//create_mirror_view(paramLIDs);
-  deep_copy(paramLIDs_host, paramLIDs);
+  auto paramLIDs_mirror = create_mirror_view(paramLIDs);
+  deep_copy(paramLIDs_mirror, paramLIDs);
+  paramLIDs_host = LIDView_host("param LIDs on host", paramLIDs.extent(0), paramLIDs.extent(1));
+  deep_copy(paramLIDs_host, paramLIDs_mirror);
   
 }
 

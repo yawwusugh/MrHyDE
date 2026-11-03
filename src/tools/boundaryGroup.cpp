@@ -233,8 +233,10 @@ void BoundaryGroup::createHostLIDs() {
 
 void BoundaryGroup::setParams(LIDView paramLIDs_) {
   paramLIDs = paramLIDs_;
+  auto paramLIDs_mirror = Kokkos::create_mirror_view(paramLIDs);
+  Kokkos::deep_copy(paramLIDs_mirror, paramLIDs);
   paramLIDs_host = LIDView_host("param LIDs on host", paramLIDs.extent(0), paramLIDs.extent(1));
-  Kokkos::deep_copy(paramLIDs_host, paramLIDs);
+  Kokkos::deep_copy(paramLIDs_host, paramLIDs_mirror);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
