@@ -175,7 +175,9 @@ void LinearAlgebraInterface<Node>::setupLinearAlgebra() {
     Teuchos::reduceAll<LO,GO>(*comm,Teuchos::REDUCE_SUM,1,&localNumUnknowns,&globalNumUnknowns);
     
     //owned_map.push_back(Teuchos::rcp(new LA_Map(globalNumUnknowns, disc->dof_owned[set], 0, comm)));
-    owned_map.push_back(Teuchos::rcp(new LA_Map(globalNumUnknowns, total_local_dof, 0, comm)));
+    // The Map takes its GID list in the solver's memory space
+    owned_map.push_back(Teuchos::rcp(new LA_Map(globalNumUnknowns,
+      Kokkos::create_mirror_view_and_copy(typename LA_device::memory_space(), total_local_dof), 0, comm)));
     
     bool allocate_matrices = true;
     if (settings->sublist("Solver").get<bool>("fully explicit",false) && settings->sublist("Solver").get<bool>("matrix free",false) ) {
@@ -201,15 +203,15 @@ void LinearAlgebraInterface<Node>::setupLinearAlgebra() {
       // Let Tpetra compute the global size because shared DOFs appear on multiple ranks.
       overlapped_map.push_back(Teuchos::rcp(new LA_Map(
         Teuchos::OrdinalTraits<Tpetra::global_size_t>::invalid(),
-        total_os_dof, 0, comm)));
+        Kokkos::create_mirror_view_and_copy(typename LA_device::memory_space(), total_os_dof), 0, comm)));
       if (!allocate_matrices) {
-        disc->dof_owned_and_shared[set] = Kokkos::View<GO*>("empty dof",1);
+        disc->dof_owned_and_shared[set] = Kokkos::View<GO*,HostDevice>("empty dof",1);
       }
       exporter.push_back(Teuchos::rcp(new LA_Export(overlapped_map[set], owned_map[set])));
       importer.push_back(Teuchos::rcp(new LA_Import(owned_map[set], overlapped_map[set])));
     }
     if (!allocate_matrices) {
-      disc->dof_owned[set] = Kokkos::View<GO*>("empty dof",1);
+      disc->dof_owned[set] = Kokkos::View<GO*,HostDevice>("empty dof",1);
     }
     if (allocate_matrices) {
       vector<size_t> max_entriesPerRow(overlapped_map[set]->getLocalNumElements(), 0);

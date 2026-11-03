@@ -1309,8 +1309,14 @@ void AnalysisManager::DCISolve()
       std::vector<Kokkos::View<ScalarT **, HostDevice>> datavec = obsdata.getData();
       Kokkos::View<ScalarT **, HostDevice> datavals = datavec[0];
 
+      // KDE takes assembly-device views
+      View_Sc2 datavals_dev("observed data", datavals.extent(0), datavals.extent(1));
+      auto datavals_mirror = Kokkos::create_mirror_view(datavals_dev);
+      Kokkos::deep_copy(datavals_mirror, datavals);
+      Kokkos::deep_copy(datavals_dev, datavals_mirror);
+
       // build KDE and evaluate at the response data points (this is where we need it)
-      View_Sc1 tmpdens = UQ.KDE(datavals, predvals);
+      View_Sc1 tmpdens = UQ.KDE(datavals_dev, predvals);
       obsdens = tmpdens; // change pointer rather than copying data
     }
 

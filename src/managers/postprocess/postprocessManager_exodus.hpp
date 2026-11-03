@@ -107,7 +107,7 @@ void PostprocessManager<Node>::writeSolution(vector<vector_RCP> &current_soln, c
             if (assembler->groups[block][0]->group_data->require_basis_at_nodes)
             {
               // The actual solution data (on device)
-              Kokkos::View<ScalarT **, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, AssemblyDevice>("solution", myElements.size(),
+              Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice>("solution", myElements.size(),
                                                                                                            numNodesPerElem);
               // Solution data on host that will be written to the file
               auto soln_computed = Kokkos::create_mirror_view(soln_dev);
@@ -135,7 +135,7 @@ void PostprocessManager<Node>::writeSolution(vector<vector_RCP> &current_soln, c
             else
             {
               // The actual solution data (on device)
-              Kokkos::View<ScalarT **, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, AssemblyDevice>("solution", myElements.size(), numNodesPerElem);
+              Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice>("solution", myElements.size(), numNodesPerElem);
 
               // Solution data on host that will be written to the file
               auto soln_computed = Kokkos::create_mirror_view(soln_dev);
@@ -313,7 +313,7 @@ void PostprocessManager<Node>::writeSolution(vector<vector_RCP> &current_soln, c
           {
 
             // The actual solution data (on device)
-            Kokkos::View<ScalarT **, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, AssemblyDevice>("solution", myElements.size(),
+            Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice>("solution", myElements.size(),
                                                                                                          numNodesPerElem);
 
             // Solution data on host that will be written to the file
@@ -824,7 +824,7 @@ void PostprocessManager<Node>::writeOptimizationSolution(const int &numEvaluatio
           int bnum = dp_usebasis[n];
           if (discParamTypes[bnum] == "HGRAD")
           {
-            Kokkos::View<ScalarT **, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, AssemblyDevice>("solution", myElements.size(), numNodesPerElem);
+            Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice>("solution", myElements.size(), numNodesPerElem);
             auto soln_computed = Kokkos::create_mirror_view(soln_dev);
             for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp)
             {
@@ -962,7 +962,7 @@ void PostprocessManager<Node>::writeOptimizationSolution(const std::string &file
           int bnum = dp_usebasis[n];
           if (discParamTypes[bnum] == "HGRAD")
           {
-            Kokkos::View<ScalarT **, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, AssemblyDevice>("solution", myElements.size(), numNodesPerElem);
+            Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice> soln_dev = Kokkos::View<ScalarT **, Kokkos::LayoutRight, AssemblyDevice>("solution", myElements.size(), numNodesPerElem);
             auto soln_computed = Kokkos::create_mirror_view(soln_dev);
             for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp)
             {

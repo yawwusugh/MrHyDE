@@ -509,7 +509,7 @@ void AssemblyManager<Node>::importMeshData() {
         auto centers = mesh->getElementCenters(nodes, groups[block][grp]->group_data->cell_topo);
         
         Kokkos::View<ScalarT*, AssemblyDevice> distance("distance",numElem);
-        Kokkos::View<int*, HostDevice> cnode("cnode",numElem);
+        Kokkos::View<int*, CompadreDevice> cnode("cnode",numElem);
         
         mesh_data->findClosestPoint(centers,cnode,distance);
         
@@ -544,7 +544,7 @@ void AssemblyManager<Node>::importMeshData() {
         auto centers = mesh->getElementCenters(nodes, boundary_groups[block][grp]->group_data->cell_topo);
         
         Kokkos::View<ScalarT*, AssemblyDevice> distance("distance",numElem);
-        Kokkos::View<int*, HostDevice> cnode("cnode",numElem);
+        Kokkos::View<int*, CompadreDevice> cnode("cnode",numElem);
         
         mesh_data->findClosestPoint(centers,cnode,distance);
 
@@ -647,7 +647,7 @@ void AssemblyManager<Node>::importQuadratureData() {
       }
       Kokkos::deep_copy(qpts, qpts_mirror);
       Kokkos::View<ScalarT*, AssemblyDevice> distance("distance", numElem*numip);
-      Kokkos::View<int*, HostDevice> cnode("cnode", numElem*numip);
+      Kokkos::View<int*, CompadreDevice> cnode("cnode", numElem*numip);
       
       qpt_data->findClosestPoint(qpts,cnode,distance);
       
