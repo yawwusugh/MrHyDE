@@ -1557,9 +1557,6 @@ void PostprocessManager<Node>::computeSensitivities(vector<vector_RCP> &u,
 
   size_t set = 0; // hard coded for now
 
-  auto u_kv = u[set]->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-  auto adjoint_kv = adjoint[set]->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-
   // KokkosTools::print(adjoint[0],"adjoint");
 
   if (params->num_active_params > 0) {
@@ -1582,8 +1579,6 @@ void PostprocessManager<Node>::computeSensitivities(vector<vector_RCP> &u,
     vector_RCP res_over = linalg->getNewOverlappedVector(set, params->num_active_params);
     matrix_RCP J_over = linalg->getNewOverlappedMatrix(set);
 
-    auto res_kv = res->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
-
     res_over->putScalar(0.0);
     vector<vector_RCP> zero_vec;
     auto paramvec = params->getDiscretizedParamsOver();
@@ -1598,6 +1593,9 @@ void PostprocessManager<Node>::computeSensitivities(vector<vector_RCP> &u,
 
     linalg->writeToFile(J_over, res, u[0], "sens_jacobian.mm",
                         "sens_residual.mm", "sens_solution.mm");
+
+    auto adjoint_kv = adjoint[set]->getLocalViewHost(Tpetra::Access::ReadOnly);
+    auto res_kv = res->getLocalViewHost(Tpetra::Access::ReadOnly);
 
     for (size_t paramiter = 0; paramiter < params->num_active_params; paramiter++) {
       // fine-scale
