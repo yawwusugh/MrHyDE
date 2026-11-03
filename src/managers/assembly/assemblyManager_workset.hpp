@@ -17,6 +17,15 @@ void AssemblyManager<Node>::createWorkset() {
   
   debugger->print("**** Starting AssemblyManager::createWorkset ...");
   
+#ifndef MrHyDE_NO_AD
+  bool fully_explicit = settings->sublist("Solver").get<bool>("fully explicit",false);
+  string analysis_type = settings->sublist("Analysis").get<string>("analysis type","forward");
+  bool requires_AD = true;
+  if (fully_explicit && (analysis_type == "forward" || analysis_type == "dry-run")) {
+    requires_AD = false;
+  }
+#endif
+  
   for (size_t block=0; block<groups.size(); ++block) {
     if (groups[block].size() > 0) {
       vector<int> info;
@@ -57,13 +66,6 @@ void AssemblyManager<Node>::createWorkset() {
       wkset[block]->var_bcs = bcs[0];
 
 #ifndef MrHyDE_NO_AD
-      bool fully_explicit = settings->sublist("Solver").get<bool>("fully explicit",false);
-      string analysis_type = settings->sublist("Analysis").get<string>("analysis type","forward");
-      bool requires_AD = true;
-      if (fully_explicit && (analysis_type == "forward" || analysis_type == "dry-run")) {
-        requires_AD = false;
-      }
-      
       bool found = false;
       
       if (requires_AD && !found && type_AD == 2 ) {
@@ -231,7 +233,9 @@ void AssemblyManager<Node>::createWorkset() {
     else {
       wkset.push_back(Teuchos::rcp( new Workset<ScalarT>(block, physics->set_names.size())));
 #ifndef MrHyDE_NO_AD
-      if (type_AD == -1) {
+      // Keep wkset_AD indexed by block: with type_AD == 0 (fully explicit) a block with elements
+      // gets an AD workset when requires_AD or !allow_autotune, so an empty block needs a placeholder too
+      if (type_AD == -1 || (type_AD == 0 && (requires_AD || !allow_autotune))) {
         wkset_AD.push_back(Teuchos::rcp( new Workset<AD>(block, physics->set_names.size())));
       }
       else if (type_AD == 2) {
