@@ -847,7 +847,7 @@ void DiscretizationInterface::setDirichletData(const size_t & set, Teuchos::RCP<
 
             for( size_t i=0; i<side_output.size(); i++ ) {
               LO local_EID = mesh->getSTKElementLocalId(side_output[i]);
-              auto elemLIDs = DOF->getElementLIDs(local_EID);
+              auto elemLIDs = Kokkos::subview(dof_lids_host[set], local_EID, Kokkos::ALL());
               const std::pair<vector<int>,vector<int> > SideIndex = DOF->getGIDFieldOffsets_closure(blockID, fieldnum,
                                                                                                         dimension-1,
                                                                                                         local_side_Ids[i]);
