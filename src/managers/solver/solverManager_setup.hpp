@@ -1607,9 +1607,9 @@ void SolverManager<Node>::setButcherTableau(const vector<string> & tableau, cons
   Kokkos::deep_copy(tmp2_butcher_b, tmp_butcher_b);
   Kokkos::deep_copy(tmp2_butcher_c, tmp_butcher_c);
   
-  Kokkos::deep_copy(dev_butcher_A, tmp_butcher_A);
-  Kokkos::deep_copy(dev_butcher_b, tmp_butcher_b);
-  Kokkos::deep_copy(dev_butcher_c, tmp_butcher_c);
+  Kokkos::deep_copy(dev_butcher_A, tmp2_butcher_A);
+  Kokkos::deep_copy(dev_butcher_b, tmp2_butcher_b);
+  Kokkos::deep_copy(dev_butcher_c, tmp2_butcher_c);
   
   int newnumstages = tmp_butcher_A.extent(0);
   
