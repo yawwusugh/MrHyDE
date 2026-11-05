@@ -196,10 +196,11 @@ public:
    *
    * @param mass Reference-counted pointer to the parameter mass matrix.
    * @param massdiag Reference-counted pointer to the vector storing the diagonal of the mass matrix.
+   * @param compute_matrix Whether to fill mass; independent of how the state mass is assembled.
    */
   void getParamMass(matrix_RCP & mass, vector_RCP & massdiag,
                     const ScalarT & l2_weight, const ScalarT & seminorm_weight,
-                    const vector<bool> & include_block);
+                    const vector<bool> & include_block, const bool compute_matrix);
   
   /**
    * @brief Compute the weight vector for a given set.

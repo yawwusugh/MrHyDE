@@ -1058,8 +1058,7 @@ void SolverManager<Node>::setupDiscretizedParamMass() {
 
   debugger->print("**** Starting SolverManager::setupDiscretizedParamMass()");
   
-  // Hard coding this to always assemble the matrix
-  // Can relax this and allow matrix-free later
+  // P is constant, so it is assembled even when the state is matrix free.
   bool compute_matrix = true;
   
   matrix_RCP pmass;
@@ -1067,13 +1066,10 @@ void SolverManager<Node>::setupDiscretizedParamMass() {
   if (compute_matrix) {
     
     paramMass = linalg->getNewParamMatrix();
-    
-    if (linalg->getHaveOverlapped()) {
-      pmass = linalg->getNewOverlappedParamMatrix();
-    }
-    else {
-      pmass = paramMass;
-    }
+    // Always assemble on the overlapped parameter graph: getHaveOverlapped() describes the
+    // state (false on one rank when fully explicit and matrix free), and the owned
+    // parameter matrix has no graph to sum element contributions into.
+    pmass = linalg->getNewOverlappedParamMatrix();
     
   }
   
@@ -1089,13 +1085,14 @@ void SolverManager<Node>::setupDiscretizedParamMass() {
   vector<bool> include_block = this->resolveParamRieszMetric();
   
   assembler->getParamMass(pmass, diagParamMass_over,
-                          param_riesz.l2_weight, param_riesz.semi_weight, include_block);
+                          param_riesz.l2_weight, param_riesz.semi_weight, include_block,
+                          compute_matrix);
   
   if (linalg->getHaveOverlapped()) {
     linalg->exportParamVectorFromOverlapped(diagParamMass, diagParamMass_over);
-    if (compute_matrix) {
-      linalg->exportParamMatrixFromOverlapped(paramMass, pmass);
-    }
+  }
+  if (compute_matrix) {
+    linalg->exportParamMatrixFromOverlapped(paramMass, pmass);
   }
   
 
@@ -1163,9 +1160,9 @@ vector<bool> SolverManager<Node>::resolveParamRieszMetric() {
   TEUCHOS_TEST_FOR_EXCEPTION(param_riesz.apply != "diagonal" && param_riesz.apply != "exact" &&
                              param_riesz.apply != "iterative", std::runtime_error,
                              "Riesz map: apply must be diagonal, exact or iterative");
-  TEUCHOS_TEST_FOR_EXCEPTION(param_riesz.apply != "diagonal" && (assembler->lump_mass || assembler->matrix_free),
+  TEUCHOS_TEST_FOR_EXCEPTION(param_riesz.apply != "diagonal" && assembler->lump_mass,
                              std::runtime_error,
-                             "Riesz map: apply exact/iterative needs an assembled matrix (unset lump mass / matrix free)");
+                             "Riesz map: apply exact/iterative cannot use a lumped mass; unset lump mass");
   if (param_riesz.apply == "iterative") {
     TEUCHOS_TEST_FOR_EXCEPTION(param_riesz.prec != "RefMaxwell" && param_riesz.prec != "Jacobi",
                                std::runtime_error,
@@ -1334,9 +1331,6 @@ vector<bool> SolverManager<Node>::resolveParamRieszMetric() {
 
 template<class Node>
 void SolverManager<Node>::completeParamRieszDiagonal(matrix_RCP & riesz, vector_RCP & diag) {
-
-  // Single rank already fillComplete'd this matrix in getParamMass; reopen so dead-row diagonals insert.
-  if (riesz->isFillComplete()) { riesz->resumeFill(); }
 
   auto dview = diag->template getLocalView<HostDevice>(Tpetra::Access::ReadWrite);
   

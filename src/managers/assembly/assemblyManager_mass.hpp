@@ -289,7 +289,8 @@ void AssemblyManager<Node>::getParamMass(matrix_RCP & mass,
                                          vector_RCP & diagMass,
                                          const ScalarT & l2_weight,
                                          const ScalarT & seminorm_weight,
-                                         const vector<bool> & include_block) {
+                                         const vector<bool> & include_block,
+                                         const bool compute_matrix) {
   
   Teuchos::TimeMonitor localtimer(*set_init_timer);
   
@@ -305,10 +306,8 @@ void AssemblyManager<Node>::getParamMass(matrix_RCP & mass,
   if (LA_exec().concurrency() > 1) {
     use_atomics_ = true;
   }
-  bool compute_matrix = true;
-  if (lump_mass || matrix_free) {
-    compute_matrix = false;
-  }
+  // compute_matrix comes from the caller: the parameter metric does not follow the state's
+  // matrix-free setting. A lumped state still gives the lumped diagonal.
   bool use_jacobi = true;
   if (lump_mass) {
     use_jacobi = false;
