@@ -444,8 +444,12 @@ void PostprocessManager<Node>::writeSolution(vector<vector_RCP> &current_soln, c
         for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp)
         {
           auto eID = assembler->groups[block][grp]->localElemID;
-          int set = 0; // TMW: why is this hard-coded?
-          assembler->performGather(set, block, grp, sol_kv[set], 0, 0);
+          // Gather every physics set: updateWorkset maps all of them from the
+          // buffer shared by the groups of this block
+          for (size_t set = 0; set < sol_kv.size(); ++set)
+          {
+            assembler->performGather(set, block, grp, sol_kv[set], 0, 0);
+          }
           assembler->performGather(0, block, grp, params_kv[0], 4, 0);
           assembler->updateWorkset(block, grp, 0, 0, true);
           assembler->wkset[block]->setTime(currenttime);
@@ -490,8 +494,14 @@ void PostprocessManager<Node>::writeSolution(vector<vector_RCP> &current_soln, c
         for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp)
         {
           auto eID = assembler->groups[block][grp]->localElemID;
-          int set = 0; // TMW: why is this hard-coded?
-          assembler->performGather(set, block, grp, sol_kv[set], 0, 0);
+          // Gather every physics set and the discretized parameters:
+          // updateWorkset maps all of them from the buffers shared by the
+          // groups of this block
+          for (size_t set = 0; set < sol_kv.size(); ++set)
+          {
+            assembler->performGather(set, block, grp, sol_kv[set], 0, 0);
+          }
+          assembler->performGather(0, block, grp, params_kv[0], 4, 0);
           assembler->updateWorkset(block, grp, 0, 0, true);
           assembler->wkset[block]->setTime(currenttime);
 
