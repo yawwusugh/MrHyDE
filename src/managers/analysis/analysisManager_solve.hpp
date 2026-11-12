@@ -123,6 +123,28 @@ static void seedDirection(Teuchos::ParameterList & ROLsettings,
 }
 
 // ========================================================================================
+// Finite-difference order for checkGradient and checkHessVec (ROL accepts 1-4).
+// Order 1 is the one-sided difference, whose error is curvature*h + roundoff/h; on a
+// quadratic objective order 2 (central) cancels the curvature term. Order k costs k
+// evaluations per step instead of 1: value solves for the gradient check, gradient
+// solves for the Hessian-vector check.
+// ========================================================================================
+
+static int readFDCheckOrder(Teuchos::ParameterList & ROLsettings) {
+  int order = ROLsettings.sublist("General").get<int>("FD Check Order", 1);
+  TEUCHOS_TEST_FOR_EXCEPTION(order < 1 || order > 4, std::invalid_argument,
+                             "Error: 'FD Check Order' must be 1, 2, 3 or 4 (2 is the central "
+                             "difference), got " + std::to_string(order) + ".");
+  return order;
+}
+
+static void printFDCheckOrder(int rank, int order) {
+  if (rank != 0 || order == 1) return;
+  std::cout << "[FDCHECK-ORDER] finite-difference order " << order
+            << (order == 2 ? " (central difference)" : "") << std::endl;
+}
+
+// ========================================================================================
 // Algebraic HessVec checks for LQ problems (H*0, bilinearity, Rayleigh).
 // ========================================================================================
 
@@ -193,12 +215,16 @@ static void runOptCheckBlock(Teuchos::ParameterList & ROLsettings,
                              Teuchos::RCP<ROL::Vector<ScalarT>> x,
                              Teuchos::RCP<ROL::Objective<ScalarT>> obj,
                              int rank) {
+  const int fd_order = readFDCheckOrder(ROLsettings);
+
   Teuchos::RCP<ROL::Vector<ScalarT>> d = x->clone();
   seedDirection(ROLsettings, d, 0);
 
   printSectionBanner(rank, "Gradient check");
+  printFDCheckOrder(rank, fd_order);
   runFDGradientCheck(ROLsettings, x, rank, "GRAD-CHECK", [&]() {
-    return obj->checkGradient(*x, *d, (rank == 0));
+    return obj->checkGradient(*x, *d, (rank == 0), std::cout,
+                              ROL_NUM_CHECKDERIV_STEPS, fd_order);
   });
 
   auto & general = ROLsettings.sublist("General");
@@ -224,8 +250,10 @@ static void runOptCheckBlock(Teuchos::ParameterList & ROLsettings,
 
   if (general.get("Do exact hessvec check", false)) {
     printSectionBanner(rank, "Hessian-vector check");
+    printFDCheckOrder(rank, fd_order);
     runFDGradientCheck(ROLsettings, x, rank, "HESSVEC-CHECK", [&]() {
-      return obj->checkHessVec(*x, *d, (rank == 0));
+      return obj->checkHessVec(*x, *d, (rank == 0), std::cout,
+                               ROL_NUM_CHECKDERIV_STEPS, fd_order);
     });
 
     printSectionBanner(rank, "Hessian symmetry check");
