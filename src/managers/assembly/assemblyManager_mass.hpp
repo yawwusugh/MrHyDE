@@ -60,6 +60,15 @@ void AssemblyManager<Node>::getWeightedMass(const size_t & set,
     // Unit weights give the unweighted basis mass matrix.
     vector<ScalarT> unit_wts(numDOF.extent(0), Teuchos::ScalarTraits<ScalarT>::one());
 
+    // Averaged loss: the element mass of variable lvar is scaled by 1 + lwts(elem)
+    int lvar = -1;
+    if (!use_unit_weights && (int)set == averaged_loss_set) {
+      lvar = averaged_loss_varnum[block];
+    }
+    if (lvar >= 0 && !data_avail) {
+      throw std::runtime_error("Error: averaged loss requires the LA device to access assembly data");
+    }
+
     // Create mirrors on LA_Device
     // This might be unnecessary, but it only happens once per block
     auto offsets_ladev = create_mirror(LA_exec(),offsets);
@@ -71,6 +80,10 @@ void AssemblyManager<Node>::getWeightedMass(const size_t & set,
     for (size_t grp=0; grp<groups[block].size(); ++grp) {
       
       auto LIDs = groups[block][grp]->LIDs[set];
+      View_Sc1 lwts;
+      if (lvar >= 0) {
+        lwts = averaged_loss_wts[block][grp];
+      }
 
       if (sparse_mass) {
         auto curr_mass = groupData[block]->sparse_database_mass[set];
@@ -106,6 +119,9 @@ void AssemblyManager<Node>::getWeightedMass(const size_t & set,
                   for (size_type k=0; k<nnz(eindex,localrow); k++ ) {
                     val += values(eindex,localrow,k);
                   }
+                }
+                if ((int)n == lvar) {
+                  val *= 1.0 + lwts(elem);
                 }
                 
                 if (use_atomics_) {
@@ -150,6 +166,9 @@ void AssemblyManager<Node>::getWeightedMass(const size_t & set,
                     val += abs(localmass(elem,row,col));
                   }
                 }
+                if ((int)n == lvar) {
+                  val *= 1.0 + lwts(elem);
+                }
               
                 if (use_atomics_) {
                   Kokkos::atomic_add(&(diag_view(rowIndex,0)), val);
@@ -176,12 +195,13 @@ void AssemblyManager<Node>::getWeightedMass(const size_t & set,
               ScalarT vals[1028];
               for (size_type n=0; n<numDOF.extent(0); ++n) {
                 const size_type numVals = numDOF(n);
+                ScalarT fac = ((int)n == lvar) ? 1.0 + lwts(elem) : 1.0;
                 for (int j=0; j<numDOF(n); j++) {
                   row = offsets(n,j);
                   rowIndex = LIDs(elem,row);
                   for (int k=0; k<numDOF(n); k++) {
                     col = offsets(n,k);
-                    vals[k] = localmass(elem,row,col);
+                    vals[k] = fac*localmass(elem,row,col);
                     cols[k] = LIDs(elem,col);
                   }
                 
@@ -279,6 +299,66 @@ void AssemblyManager<Node>::getWeightedMass(const size_t & set,
   
   debugger->print("**** Finished AssemblyManager::getWeightedMass ...");
   
+}
+
+// ========================================================================================
+// Per-element weights for the averaged loss, scale*cbar_e/mwt, where cbar_e is the element
+// average of the "averaged loss coefficient" function. getWeightedMass and
+// applyMassMatrixFree multiply the element mass of the loss variable by 1 + these weights,
+// which gives M + scale*M_c with M_c = sum_e cbar_e*M_e (the full element mass).
+// ========================================================================================
+
+template<class Node>
+void AssemblyManager<Node>::setAveragedLossWeights(const size_t & set, const string & var,
+                                                   const ScalarT & scale) {
+
+  debugger->print("**** Starting AssemblyManager::setAveragedLossWeights ...");
+
+  averaged_loss_set = set;
+  averaged_loss_varnum = vector<int>(groups.size(),-1);
+  averaged_loss_wts = vector<vector<View_Sc1> >(groups.size());
+
+  for (size_t block=0; block<groups.size(); ++block) {
+
+    // Find the loss variable on this block (it may not be active everywhere)
+    int varnum = -1;
+    for (size_t j=0; j<physics->var_list[set][block].size(); ++j) {
+      if (physics->var_list[set][block][j] == var) {
+        varnum = j;
+      }
+    }
+    averaged_loss_varnum[block] = varnum;
+    if (varnum < 0) {
+      continue;
+    }
+
+    ScalarT mwt = physics->mass_wts[set][block][varnum];
+
+    for (size_t grp=0; grp<groups[block].size(); ++grp) {
+
+      auto LIDs = groups[block][grp]->LIDs[set];
+
+      // Element average of the loss coefficient
+      this->updateWorkset(block, grp, 0, 0, true);
+      auto coeff = this->evaluateFunction(block, "averaged loss coefficient", "ip");
+      auto wts = wkset[block]->wts;
+      View_Sc1 cavg("averaged loss coefficient per element", LIDs.extent(0));
+      parallel_for("averaged loss coeff",
+                   RangePolicy<AssemblyExec>(0,LIDs.extent(0)),
+                   MRHYDE_LAMBDA (const int elem ) {
+        ScalarT num = 0.0, den = 0.0;
+        for (size_type pt=0; pt<wts.extent(1); ++pt) {
+          num += coeff(elem,pt)*wts(elem,pt);
+          den += wts(elem,pt);
+        }
+        cavg(elem) = scale*num/den/mwt;
+      });
+      averaged_loss_wts[block].push_back(cavg);
+    }
+  }
+
+  debugger->print("**** Finished AssemblyManager::setAveragedLossWeights ...");
+
 }
 
 // ========================================================================================
@@ -584,10 +664,20 @@ void AssemblyManager<Node>::applyMassMatrixFree(const size_t & set, const vector
   for (size_t block=0; block<groups.size(); ++block) {
     auto offsets = wkset[block]->offsets;
     auto numDOF = groupData[block]->num_dof;
+
+    // Averaged loss: the element mass of variable lvar is scaled by 1 + lwts(elem)
+    int lvar = -1;
+    if ((int)set == averaged_loss_set) {
+      lvar = averaged_loss_varnum[block];
+    }
     
     for (size_t grp=0; grp<groups[block].size(); ++grp) {
       
       auto cLIDs = groups[block][grp]->LIDs[set];
+      View_Sc1 lwts;
+      if (lvar >= 0) {
+        lwts = averaged_loss_wts[block][grp];
+      }
       
       if (!groups[block][grp]->storeMass) {
         auto twts = groups[block][grp]->wts;
@@ -610,6 +700,7 @@ void AssemblyManager<Node>::applyMassMatrixFree(const size_t & set, const vector
           string btype = wkset[block]->basis_types[bindex];
           auto off = subview(offsets,var,ALL());
           ScalarT mwt = physics->mass_wts[set][block][var];
+          bool is_loss = ((int)var == lvar);
           
           if (btype.substr(0,5) == "HGRAD" || btype.substr(0,4) == "HVOL") {
             parallel_for("get mass",
@@ -620,6 +711,9 @@ void AssemblyManager<Node>::applyMassMatrixFree(const size_t & set, const vector
                   ScalarT massval = 0.0;
                   for (size_type k=0; k<cbasis.extent(2); k++ ) {
                     massval += cbasis(e,i,k,0)*cbasis(e,j,k,0)*twts(e,k)*mwt;
+                  }
+                  if (is_loss) {
+                    massval *= 1.0 + lwts(e);
                   }
                   LO indi = cLIDs(e,off(i));
                   LO indj = cLIDs(e,off(j));
@@ -644,6 +738,9 @@ void AssemblyManager<Node>::applyMassMatrixFree(const size_t & set, const vector
                     for (size_type dim=0; dim<cbasis.extent(3); dim++ ) {
                       massval += cbasis(e,i,k,dim)*cbasis(e,j,k,dim)*twts(e,k)*mwt;
                     }
+                  }
+                  if (is_loss) {
+                    massval *= 1.0 + lwts(e);
                   }
                   LO indi = cLIDs(e,off(i));
                   LO indj = cLIDs(e,off(j));
@@ -683,13 +780,14 @@ void AssemblyManager<Node>::applyMassMatrixFree(const size_t & set, const vector
            
               // New code that uses sparse data structures
               for (size_type var=0; var<numDOF.extent(0); var++) {
+                ScalarT fac = ((int)var == lvar) ? 1.0 + lwts(elem) : 1.0;
                 for (int i=0; i<numDOF(var); i++ ) {
                   LO localrow = offsets(var,i);
                   LO globalrow = cLIDs(elem,localrow);
                   for (size_type k=0; k<nnz(eindex,localrow); k++ ) {
                     LO localcol = offsets(var,local_columns(eindex,localrow,k));
                     LO globalcol = cLIDs(elem,localcol);
-                    ScalarT matrixval = values(eindex,localrow,k);
+                    ScalarT matrixval = fac*values(eindex,localrow,k);
                     if (use_atomics_) {
                       Kokkos::atomic_add(&(y_slice(globalrow)), matrixval*x_slice(globalcol));
                     }
@@ -714,17 +812,19 @@ void AssemblyManager<Node>::applyMassMatrixFree(const size_t & set, const vector
               LO eindex = index(elem);
               // Old code that assumed dense data structures
               for (size_type var=0; var<numDOF.extent(0); var++) {
+                ScalarT fac = ((int)var == lvar) ? 1.0 + lwts(elem) : 1.0;
                 for (int i=0; i<numDOF(var); i++ ) {
                   LO localrow = offsets(var,i);
                   LO globalrow = cLIDs(elem,localrow);
                   for (int j=0; j<numDOF(var); j++ ) {
                     LO localcol = offsets(var,j);
                     LO globalcol = cLIDs(elem,localcol);
+                    ScalarT matrixval = fac*curr_mass(eindex,localrow,localcol);
                     if (use_atomics_) {
-                      Kokkos::atomic_add(&(y_slice(globalrow)), curr_mass(eindex,localrow,localcol)*x_slice(globalcol));
+                      Kokkos::atomic_add(&(y_slice(globalrow)), matrixval*x_slice(globalcol));
                     }
                     else {
-                      y_slice(globalrow) += curr_mass(eindex,localrow,localcol)*x_slice(globalcol);
+                      y_slice(globalrow) += matrixval*x_slice(globalcol);
                     }
                   }
                 }
@@ -739,15 +839,17 @@ void AssemblyManager<Node>::applyMassMatrixFree(const size_t & set, const vector
                        RangePolicy<AssemblyExec>(0,curr_mass.extent(0)),
                        MRHYDE_LAMBDA (const size_type elem ) {
             for (size_type var=0; var<numDOF.extent(0); var++) {
+              ScalarT fac = ((int)var == lvar) ? 1.0 + lwts(elem) : 1.0;
               for (int i=0; i<numDOF(var); i++ ) {
                 for (int j=0; j<numDOF(var); j++ ) {
                   LO indi = cLIDs(elem,offsets(var,i));
                   LO indj = cLIDs(elem,offsets(var,j));
+                  ScalarT matrixval = fac*curr_mass(elem,offsets(var,i),offsets(var,j));
                   if (use_atomics_) {
-                    Kokkos::atomic_add(&(y_slice(indi)), curr_mass(elem,offsets(var,i),offsets(var,j))*x_slice(indj));
+                    Kokkos::atomic_add(&(y_slice(indi)), matrixval*x_slice(indj));
                   }
                   else {
-                    y_slice(indi) += curr_mass(elem,offsets(var,i),offsets(var,j))*x_slice(indj);
+                    y_slice(indi) += matrixval*x_slice(indj);
                   }
                 }
               }
@@ -1270,8 +1372,9 @@ CompressedView<View_Sc3> AssemblyManager<Node>::getWeightedMass(const int & bloc
   
   }
   
-  if (groups[block][grp]->storeMass) {
-    // This assumes they are computed in order
+  if (groups[block][grp]->storeMass && groups[block][grp]->local_mass.size() <= set) {
+    // This assumes they are computed in order (the explicit mass of a set can be rebuilt,
+    // e.g. for the averaged loss, which must not append it again)
     groups[block][grp]->local_mass.push_back(mass);
   }
 

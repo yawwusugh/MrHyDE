@@ -192,6 +192,22 @@ public:
                        const bool use_unit_weights = false);
 
   /**
+   * @brief Store per-element weights so the mass of variable var on set becomes
+   * M + scale*M_c, where M_c is the mass weighted by the element average of the
+   * "averaged loss coefficient" function.
+   *
+   * Each element mass block M_e of var (weighted by its mass weight mwt) is multiplied by
+   * 1 + scale*cbar_e/mwt in getWeightedMass() and applyMassMatrixFree(), which adds exactly
+   * scale*cbar_e*M_e/mwt: the unit-weight element mass (the full block, not only its diagonal).
+   * cbar_e is evaluated once, so the coefficient must not depend on time or parameters.
+   *
+   * @param set      Index of the physics set.
+   * @param var      Name of the variable the loss term acts on.
+   * @param scale    Scaling (dt/2 for a time-averaged loss).
+   */
+  void setAveragedLossWeights(const size_t & set, const string & var, const ScalarT & scale);
+
+  /**
    * @brief Compute the parameter mass matrix and its diagonal.
    *
    * @param mass Reference-counted pointer to the parameter mass matrix.
@@ -2200,6 +2216,10 @@ std::vector<Kokkos::View<bool*,LA_device> > isFixedDOF;       // DOF flags for f
 std::vector<vector<vector<Kokkos::View<LO*,LA_device> > > > fixedDOF; // Fixed DOF lists [set][block][var]
 
 Teuchos::RCP<ParameterManager<Node> > params;                 // Manager for nodal parameter values
+
+int averaged_loss_set = -1;                                   // Set with the averaged loss (-1 if off)
+vector<int> averaged_loss_varnum;                             // Loss variable index per block (-1 if absent)
+vector<vector<View_Sc1> > averaged_loss_wts;                  // scale*cbar_e/mwt per element [block][grp]
 
 vector<int> num_derivs_required;                              // Required AD derivative count per variable set
 int type_AD;                                                  // Selected AD type identifier

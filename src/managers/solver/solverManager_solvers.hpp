@@ -682,6 +682,16 @@ int SolverManager<Node>::explicitSolver(const size_t & set, const size_t & stage
   debugger->print(1, "******** Starting SolverManager::explicitSolver ...");
   
   int status = 0;
+
+  // Built here rather than in setupExplicitMass(), since it needs finalized functions
+  if (averaged_loss && (int)set == averaged_loss_set) {
+    if (!averaged_loss_ready) {
+      this->setupAveragedLoss(set);
+    }
+    TEUCHOS_TEST_FOR_EXCEPTION(deltat != averaged_loss_dt, std::runtime_error,
+                               "Error: averaged loss does not support a changing time step");
+  }
+
   assembler->updatePhysicsSet(set);
   
   if (usestrongDBCs) {
@@ -1006,10 +1016,18 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
 // ========================================================================================
 // AD-free discrete adjoint of the fully explicit E/B split
 //
-// Forward (E = set 0, B = set 1, one FWE stage each, r = -R from assembleRes):
-//   E^{n+1} = E^n + dt M_E^{-1} r_E(E^n, B^n, p_n, t_n)
+// Forward (E = set 0, B = set 1, one explicit stage each, r = -R from assembleRes):
+//   E^{n+1} = E^n + dt M_E^{-1} r_E(E^n, B^n, p_n, t_n + c_E dt)
 //   B^{n+1} = B^n + dt M_B^{-1} r_B(E^{n+1})
 // with (3D maxwell) R_E = (1/eps)(S E + F p + g) - 1/(mu eps) K B and R_B = C E, C = K^T.
+// c_E is the Butcher c of the E set: 0 for FWE; a custom tableau A = 0, b = 1, c = 1/2 evaluates
+// the source g at the midpoint t_{n+1/2}, which makes the source term second order. The sweep uses
+// the linear residual r^lin, which has no source, so it holds for any c_E as long as sigma, eps and
+// mu do not depend on t.
+// With the averaged loss ('averaged loss: true' on the E set), sigma E is taken as sigma (E^n + E^{n+1})/2,
+// which turns the E step into M~_E (E^{n+1} - E^n) = dt r_E(E^n, ...) with M~_E = M_E + dt/2 M_c (setupAveragedLoss).
+// M~_E is symmetric and r_E keeps the full -(1/eps) S E^n, so the sweep below holds with M_E read as M~_E;
+// applyExplicitMassInverse applies M~_E once the loss term is built.
 // With strong Dirichlet conditions, dt M^{-1} stands for dt P M^{-1} P, P the projection onto the
 // free DOFs (explicitSolver zeroes the residual on fixed DOFs and the mass solve keeps them fixed).
 // This operator is symmetric, so the sweep below holds unchanged with applyExplicitMassInverse
@@ -1056,12 +1074,15 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   }
   for (size_t set=0; set<setnames.size(); ++set) {
     TEUCHOS_TEST_FOR_EXCEPTION(numstages[set] != 1 || maxnumstages[set] != 1, std::runtime_error,
-                               "Error: the explicit adjoint requires a single-stage scheme (FWE) in each set.");
+                               "Error: the explicit adjoint requires a single-stage scheme in each set.");
     TEUCHOS_TEST_FOR_EXCEPTION(BDForder[set] != 1, std::runtime_error,
                                "Error: the explicit adjoint requires 'transient BDF order: 1'.");
     TEUCHOS_TEST_FOR_EXCEPTION(std::abs(butcher_A[set](0,0)) > 1.0e-14, std::runtime_error,
                                "Error: the explicit adjoint requires an explicit stage (Butcher A(0,0) = 0).");
   }
+  // The forward builds M~_E on its first E solve; without it the sweep would use M_E
+  TEUCHOS_TEST_FOR_EXCEPTION(averaged_loss && !averaged_loss_ready, std::runtime_error,
+                             "Error: the explicit adjoint found the averaged loss on but its mass term not built.");
   for (size_t block=0; block<assembler->wkset.size(); ++block) {
     if (!assembler->wkset[block]->isInitialized) {
       continue;
@@ -1158,6 +1179,10 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   //   F^T:          <-(1/eps) F^T x, d> = <x, r_E^lin(0, 0; d)>
   //   M symmetric:  <dt M^{-1} a, b> = <a, dt M^{-1} b>
   //   CFL:          dt^2 lambda_max(M_E^{-1} K M_B^{-1} C)/(mu eps) <= 4 (symplectic Euler stability)
+  //   averaged loss: (M~_E - M_E) E^N vs -(dt/2) r_E^lin(E^N, 0) at the final state, which has reached the
+  //                 conductive region; they differ because M_c uses element averages of sigma/eps and the mass
+  //                 quadrature (Gauss-Lobatto when sparsified), while r_E has sigma at the residual's quadrature
+  //                 points
   // With the stored forward states at n = N/2:
   //   forward step: E^{n+1} - E^n = dt M_E^{-1} r_E(E^n, B^n; p_n),  B^{n+1} - B^n = dt M_B^{-1} r_B(E^{n+1})
   //   objective:    <dJ/dE^n, E^n> + <dJ/dB^n, B^n> = 2 dt J_n  (J_n is quadratic)
@@ -1242,6 +1267,48 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
       this->applyExplicitMassInverse(set, r, xb);
       lhsM[set] = dotp(xa, b);
       rhsM[set] = dotp(a, xb);
+    }
+    // Averaged loss at the final state: (M~_E - M_E) E^N, with M_E from the mass apply with the loss
+    // weights switched off, against the loss term of the residual, -(dt/2) r_E^lin(E^N, 0). Fixed DOFs are
+    // zeroed in both (their rows are not used by the update).
+    bool checkLoss = averaged_loss && averaged_loss_set == 0 && averaged_loss_ready;
+    ScalarT lossDiff = 0.0, lossNorm = 0.0, lossMassNorm = 0.0;
+    if (checkLoss) {
+      vector_RCP Ef = linalg->getNewOverlappedVector(0);
+      extractState(0, Ef, numFwdSteps);
+      vector_RCP qo = linalg->getNewOverlappedVector(0), q0o = linalg->getNewOverlappedVector(0);
+      vector_RCP q = linalg->getNewVector(0), q0 = linalg->getNewVector(0);
+      assembler->updatePhysicsSet(0);  // the mass apply uses the current set's offsets
+      qo->putScalar(0.0);
+      assembler->applyMassMatrixFree(0, Ef, qo);
+      int loss_set = assembler->averaged_loss_set;
+      assembler->averaged_loss_set = -1;
+      q0o->putScalar(0.0);
+      assembler->applyMassMatrixFree(0, Ef, q0o);
+      assembler->averaged_loss_set = loss_set;
+      if (have_over) {
+        q->putScalar(0.0);
+        q0->putScalar(0.0);
+        linalg->exportVectorFromOverlapped(0, q, qo);
+        linalg->exportVectorFromOverlapped(0, q0, q0o);
+      }
+      else {
+        q->assign(*qo);
+        q0->assign(*q0o);
+      }
+      q->update(-1.0, *q0, 1.0);
+      this->explicitLinearResidual(0, Ef, zero_B_over, resE);
+      resE->scale(-0.5*deltat);
+      this->zeroExplicitFixedDOFs(0, q);
+      this->zeroExplicitFixedDOFs(0, resE);
+      Teuchos::Array<ScalarT> nrm(1);
+      q->norm2(nrm);
+      lossMassNorm = nrm[0];
+      resE->norm2(nrm);
+      lossNorm = nrm[0];
+      q->update(-1.0, *resE, 1.0);
+      q->norm2(nrm);
+      lossDiff = nrm[0];
     }
     // Forward step and objective at n = N/2
     ScalarT stepErr[2] = {0.0, 0.0}, stepNorm[2] = {0.0, 0.0}, objCheck[2] = {0.0, 0.0};
@@ -1329,7 +1396,12 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
       cout << endl << "[EXPLICIT-ADJOINT-CHECK] forward E step : |dE - dt M^-1 r_E| = " << stepErr[0] << "  |dE| = " << stepNorm[0] << endl;
       cout << "[EXPLICIT-ADJOINT-CHECK] forward B step : |dB - dt M^-1 r_B| = " << stepErr[1] << "  |dB| = " << stepNorm[1] << endl;
       cout << "[EXPLICIT-ADJOINT-CHECK] objective grad : " << objCheck[0] << "  " << objCheck[1] << "  rel diff " << rel(objCheck[0],objCheck[1]) << endl;
-      cout << "[EXPLICIT-ADJOINT-CHECK] CFL number     : " << lam << "  (stable iff <= 4)" << endl;
+      cout << "[EXPLICIT-ADJOINT-CHECK] CFL number     : " << lam << "  (stable iff <= 4)"
+           << (checkLoss ? "  (with M~_E)" : "") << endl;
+      if (checkLoss) {
+        cout << "[EXPLICIT-ADJOINT-CHECK] averaged loss: |(M~-M)E^N| = " << lossMassNorm << "  |(dt/2) r_E(E^N,0)| = "
+             << lossNorm << "  rel diff " << lossDiff/std::max(lossNorm, 1.0e-300) << "  (D vs S_res, not round-off)" << endl;
+      }
       cout << "[EXPLICIT-ADJOINT-CHECK] C = K^T      : " << lhsC << "  " << rhsC << "  rel diff " << rel(lhsC,rhsC) << endl;
       cout << "[EXPLICIT-ADJOINT-CHECK] S symmetric  : " << lhsS << "  " << rhsS << "  rel diff " << rel(lhsS,rhsS) << endl;
       cout << "[EXPLICIT-ADJOINT-CHECK] F^T          : " << lhsF << "  " << rhsF << "  rel diff " << rel(lhsF,rhsF) << endl;

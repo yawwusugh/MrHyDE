@@ -91,9 +91,40 @@ public:
   void setupExplicitMass();
   
   /**
-   * @brief Impose the fixed (Dirichlet) DOFs on the explicit mass solve.
+   * @brief Impose the fixed (Dirichlet) DOFs on the explicit mass solve: build the owned
+   * fixed-DOF flags used by matrixFreePCG, then call applyExplicitMassConstraints for each set.
    */
   void setupExplicitMassConstraints();
+  
+  /**
+   * @brief Replace the fixed rows and columns of the assembled explicit mass of one set by the
+   * identity. Collective; called again after the mass is rebuilt (setupAveragedLoss).
+   */
+  void applyExplicitMassConstraints(const size_t & set);
+  
+  /**
+   * @brief Host flags marking which local elements of map are fixed (Dirichlet) DOFs of one set.
+   */
+  typename Kokkos::View<bool*,LA_device>::host_mirror_type
+  getExplicitFixedFlags(const size_t & set, const Teuchos::RCP<const Tpetra::Map<LO,GO,Node> > & map);
+  
+  /**
+   * @brief Build (or rebuild) the explicit mass matrix and its diagonal for one set.
+   */
+  void buildExplicitMass(const size_t & set);
+  
+  /**
+   * @brief Add the averaged-loss term dt/2*M_c to the explicit mass of the loss set.
+   *
+   * Treats a loss term c*u semi-implicitly, c*(u^n + u^{n+1})/2, which turns the explicit
+   * update into (M + dt/2 M_c)(u^{n+1}-u^n)/dt = r(u^n).  M_c = sum_e cbar_e M_e/mwt uses the
+   * element average cbar_e of the "averaged loss coefficient" times the unit-weight element
+   * mass M_e/mwt (M_e as stored for M, so sparsified or lumped the same way, and mwt the mass
+   * weight of u), so the update stays a diagonal scaling when M is diagonal.  Called lazily
+   * on the first explicit solve, since functions are not finalized when setupExplicitMass()
+   * runs.  The coefficient is evaluated once, so it must not depend on time or parameters.
+   */
+  void setupAveragedLoss(const size_t & set);
   
   /**
    * @brief Set up mass matrix actions for discretized parameters.
@@ -428,6 +459,12 @@ public:
   ParamRieszConfig param_riesz;  // metric config; see param_riesz/ParamRieszConfig.hpp
   bool print_mass;           // print mass matrix and lumped mass
   
+  bool averaged_loss = false;       // semi-implicit (averaged) loss term on one set
+  bool averaged_loss_ready = false; // dt/2 M_c has been added to the mass
+  int averaged_loss_set = -1;       // set index of the loss equation
+  string averaged_loss_var;         // variable the loss acts on
+  ScalarT averaged_loss_dt = 0.0;   // time step used to build dt/2 M_c
+  
   vector<vector<vector<ScalarT>>> scalarDirichletValues; // Dirichlet data per set/block/var
   vector<vector<vector<ScalarT>>> scalarInitialValues;   // Initial state per set/block/var
   
@@ -436,6 +473,7 @@ public:
   vector<Teuchos::RCP<LA_MultiVector>> diagMass;       // Diagonal mass matrices per set
   vector<matrix_RCP> explicitMass;                     // Explicit mass matrices
   vector<Kokkos::View<bool*,LA_device> > explicitFixedDOF; // Fixed DOF flags on the owned map per set
+  vector<GO> explicitNumFixedDOF;                          // Global number of fixed DOFs per set
   
   Teuchos::RCP<LA_MultiVector> diagParamMass; // Diagonal mass for parameters
   matrix_RCP paramMass;                      // Parameter mass matrix

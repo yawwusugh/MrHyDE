@@ -892,53 +892,11 @@ void SolverManager<Node>::setupExplicitMass() {
 
   debugger->print("**** Starting SolverManager::setupExplicitMass()");
   
-  bool compute_matrix = true;
-  if (assembler->lump_mass || assembler->matrix_free) {
-    compute_matrix = false;
+  for (size_t set=0; set<useBasis.size(); ++set) {
+    this->buildExplicitMass(set);
   }
   
   for (size_t set=0; set<useBasis.size(); ++set) {
-    matrix_RCP mass;
-    
-    assembler->updatePhysicsSet(set);
-    if (compute_matrix) {
-      explicitMass.push_back(linalg->getNewMatrix(set));
-      if (linalg->getHaveOverlapped()) {
-        mass = linalg->getNewOverlappedMatrix(set);
-      }
-      else {
-        mass = explicitMass[set];
-      }
-    }
-    
-    diagMass.push_back(linalg->getNewVector(set));
-    vector_RCP diagMass_over;
-    if (linalg->getHaveOverlapped()) {
-      diagMass_over = linalg->getNewOverlappedVector(set);
-    } 
-    else {
-      diagMass_over = diagMass[set];
-    }
-    
-    assembler->getWeightedMass(set,mass,diagMass_over);
-    
-    if (linalg->getHaveOverlapped()) {
-      linalg->exportVectorFromOverlapped(set,diagMass[set], diagMass_over);
-      if (compute_matrix) {
-        linalg->exportMatrixFromOverlapped(set,explicitMass[set], mass);
-      }
-    }
-    
-  }
-
-  debugger->print("**** Starting SolverManager::setupExplicitMass() - fillComplete");
-  
-  for (size_t set=0; set<useBasis.size(); ++set) {
-    
-    if (compute_matrix) {
-      linalg->fillComplete(explicitMass[set]);
-    }
-    
     if (store_vectors) {
       q_pcg.push_back(linalg->getNewVector(set));
       z_pcg.push_back(linalg->getNewVector(set));
@@ -952,14 +910,115 @@ void SolverManager<Node>::setupExplicitMass() {
   }
   
   debugger->print("**** Finished SolverManager::setupExplicitMass()");
+
+}
+
+// ========================================================================================
+// Build (or rebuild) the explicit mass of one set: the assembled matrix, unless lumped or
+// matrix-free, and its diagonal (Jacobi preconditioner or lumped mass)
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::buildExplicitMass(const size_t & set) {
+
+  debugger->print("**** Starting SolverManager::buildExplicitMass()");
   
+  bool compute_matrix = true;
+  if (assembler->lump_mass || assembler->matrix_free) {
+    compute_matrix = false;
+  }
+  
+  matrix_RCP mass;
+  
+  assembler->updatePhysicsSet(set);
+  if (compute_matrix) {
+    if (explicitMass.size() > set) {
+      explicitMass[set] = linalg->getNewMatrix(set);
+    }
+    else {
+      explicitMass.push_back(linalg->getNewMatrix(set));
+    }
+    if (linalg->getHaveOverlapped()) {
+      mass = linalg->getNewOverlappedMatrix(set);
+    }
+    else {
+      mass = explicitMass[set];
+    }
+  }
+  
+  if (diagMass.size() > set) {
+    diagMass[set] = linalg->getNewVector(set);
+  }
+  else {
+    diagMass.push_back(linalg->getNewVector(set));
+  }
+  vector_RCP diagMass_over;
+  if (linalg->getHaveOverlapped()) {
+    diagMass_over = linalg->getNewOverlappedVector(set);
+  } 
+  else {
+    diagMass_over = diagMass[set];
+  }
+  
+  assembler->getWeightedMass(set,mass,diagMass_over);
+  
+  if (linalg->getHaveOverlapped()) {
+    linalg->exportVectorFromOverlapped(set,diagMass[set], diagMass_over);
+    if (compute_matrix) {
+      linalg->exportMatrixFromOverlapped(set,explicitMass[set], mass);
+    }
+  }
+  
+  if (compute_matrix) {
+    linalg->fillComplete(explicitMass[set]);
+  }
+  
+  debugger->print("**** Finished SolverManager::buildExplicitMass()");
+
+}
+
+// ========================================================================================
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::setupAveragedLoss(const size_t & set) {
+
+  debugger->print("**** Starting SolverManager::setupAveragedLoss()");
+
+  // The loss c*(u^n + u^{n+1})/2 gives (M + dt/2 M_c)(u^{n+1}-u^n)/dt = r(u^n),
+  // which assumes a single explicit stage with b = 1
+  TEUCHOS_TEST_FOR_EXCEPTION(numstages[set] != 1 || butcher_b[set](0) != 1.0, std::runtime_error,
+                             "Error: averaged loss requires a single-stage explicit tableau with b = 1 on the loss set");
+
+  // Weight the element mass of the loss variable by 1 + dt/2*cbar_e/mwt, then rebuild the
+  // mass of this set, so the matrix, its diagonal and the matrix-free apply all use
+  // M + dt/2 M_c with the full element masses
+  assembler->updatePhysicsSet(set);
+  assembler->setAveragedLossWeights(set, averaged_loss_var, 0.5*deltat);
+  this->buildExplicitMass(set);
+  // The rebuild replaced the assembled mass, so impose the fixed DOFs again (after the loss term)
+  this->applyExplicitMassConstraints(set);
+
+  averaged_loss_dt = deltat;
+  averaged_loss_ready = true;
+
+  if (verbosity >= 10) {
+    Teuchos::Array<typename Teuchos::ScalarTraits<ScalarT>::magnitudeType> mnorm(1);
+    diagMass[set]->normInf(mnorm);
+    if (Comm->getRank() == 0) {
+      cout << "***** Averaged loss on set " << setnames[set] << ": max diag(M + dt/2 M_c) = " << mnorm[0] << endl;
+    }
+  }
+
+  debugger->print("**** Finished SolverManager::setupAveragedLoss()");
+
 }
 
 // ========================================================================================
 // The explicit update solves M du = wt*res, where res is zero on fixed DOFs.
 // M couples fixed and free DOFs, so du would be nonzero on the fixed DOFs and the
-// free DOFs would not be updated with M_II. Replace the fixed rows and columns of the
-// assembled mass by the identity, and store the owned flags for matrixFreePCG.
+// free DOFs would not be updated with M_II. Store the owned flags for matrixFreePCG, then
+// replace the fixed rows and columns of the assembled mass by the identity.
 // ========================================================================================
 
 template<class Node>
@@ -967,31 +1026,13 @@ void SolverManager<Node>::setupExplicitMassConstraints() {
   
   debugger->print("**** Starting SolverManager::setupExplicitMassConstraints()");
   
-  typedef typename Node::execution_space LA_exec;
-  
   for (size_t set=0; set<useBasis.size(); ++set) {
     
-    // isFixedDOF is indexed by the spatial LID on the overlapped map (or the owned map if there is none)
-    auto fixed_host = Kokkos::create_mirror_view(assembler->isFixedDOF[set]);
-    Kokkos::deep_copy(fixed_host, assembler->isFixedDOF[set]);
-    LO num_phase_dof = disc->getNumPhaseDOFs(set);
-    auto fixed_map = linalg->owned_map[set];
-    if (linalg->getHaveOverlapped()) {
-      fixed_map = linalg->overlapped_map[set];
-    }
-    
-    auto isFixedGID = [&](const GO & gid) -> bool {
-      LO lid = fixed_map->getLocalElement(gid);
-      return lid != Teuchos::OrdinalTraits<LO>::invalid() && fixed_host(lid/num_phase_dof);
-    };
-    
     // Flags on the owned map (used by matrixFreePCG)
-    auto owned_map = linalg->owned_map[set];
-    Kokkos::View<bool*,LA_device> owned_fixed("fixed DOFs on owned map", owned_map->getLocalNumElements());
-    auto owned_fixed_host = Kokkos::create_mirror_view(owned_fixed);
+    auto owned_fixed_host = this->getExplicitFixedFlags(set, linalg->owned_map[set]);
+    Kokkos::View<bool*,LA_device> owned_fixed("fixed DOFs on owned map", owned_fixed_host.extent(0));
     GO num_fixed = 0;
     for (size_t k=0; k<owned_fixed_host.extent(0); ++k) {
-      owned_fixed_host(k) = isFixedGID(owned_map->getGlobalElement((LO)k));
       if (owned_fixed_host(k)) {
         num_fixed++;
       }
@@ -999,53 +1040,99 @@ void SolverManager<Node>::setupExplicitMassConstraints() {
     Kokkos::deep_copy(owned_fixed, owned_fixed_host);
     explicitFixedDOF.push_back(owned_fixed);
     
-    // fillComplete is collective, so every rank must take the same branch,
-    // including ranks that own no fixed rows (they may still have fixed columns)
+    // The global count decides whether applyExplicitMassConstraints calls the collective
+    // fillComplete, so every rank takes the same branch, including ranks that own no
+    // fixed rows (they may still have fixed columns)
     GO global_num_fixed = 0;
     Teuchos::reduceAll<int, GO>(*Comm, Teuchos::REDUCE_SUM, 1, &num_fixed, &global_num_fixed);
+    explicitNumFixedDOF.push_back(global_num_fixed);
     
-    // Assembled mass: zero the fixed rows and columns, put ones on the diagonal
-    if (global_num_fixed > 0 && set < explicitMass.size()) {
-      matrix_RCP mass = explicitMass[set];
-      auto row_map = mass->getRowMap();
-      auto col_map = mass->getColMap();
-      
-      Kokkos::View<bool*,LA_device> col_fixed("fixed DOFs on column map", col_map->getLocalNumElements());
-      auto col_fixed_host = Kokkos::create_mirror_view(col_fixed);
-      for (size_t k=0; k<col_fixed_host.extent(0); ++k) {
-        col_fixed_host(k) = isFixedGID(col_map->getGlobalElement((LO)k));
-      }
-      Kokkos::deep_copy(col_fixed, col_fixed_host);
-      
-      // Column index of the diagonal on fixed rows, -1 on free rows
-      Kokkos::View<LO*,LA_device> diag_col("diagonal column of fixed rows", row_map->getLocalNumElements());
-      auto diag_col_host = Kokkos::create_mirror_view(diag_col);
-      for (size_t k=0; k<diag_col_host.extent(0); ++k) {
-        GO gid = row_map->getGlobalElement((LO)k);
-        diag_col_host(k) = isFixedGID(gid) ? col_map->getLocalElement(gid) : -1;
-      }
-      Kokkos::deep_copy(diag_col, diag_col_host);
-      
-      mass->resumeFill();
-      auto local_mass = mass->getLocalMatrixDevice();
-      auto rowptr = local_mass.graph.row_map;
-      auto cols = local_mass.graph.entries;
-      auto vals = local_mass.values;
-      parallel_for("explicit mass fixed DOFs",
-                   RangePolicy<LA_exec>(0,local_mass.numRows()),
-                   MRHYDE_LAMBDA (const int row ) {
-        bool fixed_row = diag_col(row) >= 0;
-        for (size_type j=rowptr(row); j<rowptr(row+1); ++j) {
-          if (fixed_row || col_fixed(cols(j))) {
-            vals(j) = (cols(j) == diag_col(row)) ? 1.0 : 0.0;
-          }
-        }
-      });
-      linalg->fillComplete(explicitMass[set]);
-    }
+    this->applyExplicitMassConstraints(set);
   }
   
   debugger->print("**** Finished SolverManager::setupExplicitMassConstraints()");
+  
+}
+
+// ========================================================================================
+// Host flags marking which local elements of map are fixed (Dirichlet) DOFs of one set.
+// isFixedDOF is indexed by the spatial LID on the overlapped map (or the owned map if there
+// is none), so each GID is looked up there.
+// ========================================================================================
+
+template<class Node>
+typename Kokkos::View<bool*,typename Node::device_type>::host_mirror_type
+SolverManager<Node>::getExplicitFixedFlags(const size_t & set,
+                                           const Teuchos::RCP<const Tpetra::Map<LO,GO,Node> > & map) {
+  
+  auto fixed_host = Kokkos::create_mirror_view(assembler->isFixedDOF[set]);
+  Kokkos::deep_copy(fixed_host, assembler->isFixedDOF[set]);
+  LO num_phase_dof = disc->getNumPhaseDOFs(set);
+  auto fixed_map = linalg->owned_map[set];
+  if (linalg->getHaveOverlapped()) {
+    fixed_map = linalg->overlapped_map[set];
+  }
+  
+  Kokkos::View<bool*,LA_device> flags("fixed DOF flags", map->getLocalNumElements());
+  auto flags_host = Kokkos::create_mirror_view(flags);
+  for (size_t k=0; k<flags_host.extent(0); ++k) {
+    LO lid = fixed_map->getLocalElement(map->getGlobalElement((LO)k));
+    flags_host(k) = lid != Teuchos::OrdinalTraits<LO>::invalid() && fixed_host(lid/num_phase_dof);
+  }
+  return flags_host;
+  
+}
+
+// ========================================================================================
+// Assembled mass of one set: zero the fixed rows and columns and put ones on the diagonal.
+// Collective (fillComplete). Called after every (re)build of the assembled mass.
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::applyExplicitMassConstraints(const size_t & set) {
+  
+  debugger->print("**** Starting SolverManager::applyExplicitMassConstraints()");
+  
+  typedef typename Node::execution_space LA_exec;
+  
+  if (set < explicitNumFixedDOF.size() && explicitNumFixedDOF[set] > 0 && set < explicitMass.size()) {
+    
+    matrix_RCP mass = explicitMass[set];
+    auto row_map = mass->getRowMap();
+    auto col_map = mass->getColMap();
+    
+    auto col_fixed_host = this->getExplicitFixedFlags(set, col_map);
+    Kokkos::View<bool*,LA_device> col_fixed("fixed DOFs on column map", col_fixed_host.extent(0));
+    Kokkos::deep_copy(col_fixed, col_fixed_host);
+    
+    // Column index of the diagonal on fixed rows, -1 on free rows
+    auto row_fixed_host = this->getExplicitFixedFlags(set, row_map);
+    Kokkos::View<LO*,LA_device> diag_col("diagonal column of fixed rows", row_map->getLocalNumElements());
+    auto diag_col_host = Kokkos::create_mirror_view(diag_col);
+    for (size_t k=0; k<diag_col_host.extent(0); ++k) {
+      diag_col_host(k) = row_fixed_host(k) ? col_map->getLocalElement(row_map->getGlobalElement((LO)k)) : -1;
+    }
+    Kokkos::deep_copy(diag_col, diag_col_host);
+    
+    mass->resumeFill();
+    auto local_mass = mass->getLocalMatrixDevice();
+    auto rowptr = local_mass.graph.row_map;
+    auto cols = local_mass.graph.entries;
+    auto vals = local_mass.values;
+    parallel_for("explicit mass fixed DOFs",
+                 RangePolicy<LA_exec>(0,local_mass.numRows()),
+                 MRHYDE_LAMBDA (const int row ) {
+      bool fixed_row = diag_col(row) >= 0;
+      for (size_type j=rowptr(row); j<rowptr(row+1); ++j) {
+        if (fixed_row || col_fixed(cols(j))) {
+          vals(j) = (cols(j) == diag_col(row)) ? 1.0 : 0.0;
+        }
+      }
+    });
+    linalg->fillComplete(explicitMass[set]);
+  }
+  
+  debugger->print("**** Finished SolverManager::applyExplicitMassConstraints()");
   
 }
 

@@ -95,6 +95,31 @@ Comm(Comm_), settings(settings_), mesh(mesh_), disc(disc_), physics(physics_), a
   // needed information from the mesh
   blocknames = physics->block_names;
   phase_blocknames = physics->phase_block_names;
+
+  // Semi-implicit (averaged) loss term for explicit schemes, see setupAveragedLoss()
+  // The default coefficient matches the 3D maxwell E residual, (sigma/eps) E; the 2D
+  // maxwell residual has sigma E, and other physics need their own coefficient
+  averaged_loss = settings->sublist("Solver").get<bool>("averaged loss",false);
+  if (averaged_loss) {
+    TEUCHOS_TEST_FOR_EXCEPTION(!fully_explicit, std::runtime_error,
+                               "Error: averaged loss requires fully explicit: true");
+    string loss_setname = settings->sublist("Solver").get<string>("averaged loss set",setnames[0]);
+    for (size_t set=0; set<setnames.size(); ++set) {
+      if (setnames[set] == loss_setname) {
+        averaged_loss_set = set;
+      }
+    }
+    TEUCHOS_TEST_FOR_EXCEPTION(averaged_loss_set < 0, std::runtime_error,
+                               "Error: averaged loss set " + loss_setname + " is not a physics set");
+    averaged_loss_var = settings->sublist("Solver").get<string>("averaged loss variable","E");
+    TEUCHOS_TEST_FOR_EXCEPTION(dimension != 3 && !settings->sublist("Solver").isParameter("averaged loss coefficient"),
+                               std::runtime_error,
+                               "Error: the default averaged loss coefficient (sigma/epsilon) matches the 3D maxwell residual only; set 'averaged loss coefficient'");
+    string loss_coeff = settings->sublist("Solver").get<string>("averaged loss coefficient","sigma/epsilon");
+    for (size_t block=0; block<blocknames.size(); ++block) {
+      assembler->addFunction(block, "averaged loss coefficient", loss_coeff, "ip");
+    }
+  }
   
   // needed information from the physics interface
   numVars = physics->num_vars; //
