@@ -1020,8 +1020,9 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
 //   E^{n+1} = E^n + dt M_E^{-1} r_E(E^n, B^n, p_n, t_n + c_E dt)
 //   B^{n+1} = B^n + dt M_B^{-1} r_B(E^{n+1})
 // with (3D maxwell) R_E = (1/eps)(S E + F p + g) - 1/(mu eps) K B and R_B = C E, C = K^T.
-// c_E is the Butcher c of the E set: 0 for FWE; a custom tableau A = 0, b = 1, c = 1/2 evaluates
-// the source g at the midpoint t_{n+1/2}, which makes the source term second order. The sweep uses
+// c_E is the Butcher c of the E set: 0 for FWE; FWE-midpoint (A = 0, b = 1, c = 1/2, set by
+// 'explicit split second order: true') evaluates the source g at the midpoint t_{n+1/2}, which
+// makes the source term second order. The sweep uses
 // the linear residual r^lin, which has no source, so it holds for any c_E as long as sigma, eps and
 // mu do not depend on t.
 // With the averaged loss ('averaged loss: true' on the E set), sigma E is taken as sigma (E^n + E^{n+1})/2,

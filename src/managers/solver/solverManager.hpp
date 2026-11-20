@@ -432,6 +432,7 @@ public:
   bool useL2proj;                // Use L2 projection for some operations
   bool discretized_stochastic;   // Whether stochastic parameters are discretized fields
   bool fully_explicit;           // True if scheme is fully explicit
+  bool explicit_split_second_order = false; // second-order E/B split: midpoint source and averaged loss on E
   bool use_custom_PCG;           // Use customized PCG instead of standard
   bool isInitial;                // Flags first iteration of transient solve
   bool isTransient;              // Indicates transient or steady solve

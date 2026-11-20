@@ -88,6 +88,20 @@ Comm(Comm_), settings(settings_), mesh(mesh_), disc(disc_), physics(physics_), a
   
   // Explicit integration mode - may disable some features
   fully_explicit = settings->sublist("Solver").get<bool>("fully explicit",false);
+  // Second-order E/B split (set 0 = {E}, set 1 = {B}, both FWE): the E set gets the source at
+  // t_n + dt/2 (FWE-midpoint) and the averaged loss, unless the deck sets them itself
+  explicit_split_second_order = settings->sublist("Solver").get<bool>("explicit split second order",false);
+  if (explicit_split_second_order) {
+    TEUCHOS_TEST_FOR_EXCEPTION(!fully_explicit, std::runtime_error,
+                               "Error: explicit split second order requires fully explicit: true");
+    TEUCHOS_TEST_FOR_EXCEPTION(settings->sublist("Solver").get<string>("transient Butcher tableau","BWE") != "FWE",
+                               std::runtime_error,
+                               "Error: explicit split second order requires transient Butcher tableau: FWE");
+    TEUCHOS_TEST_FOR_EXCEPTION(settings->sublist("Solver").get<int>("transient BDF order",1) != 1, std::runtime_error,
+                               "Error: explicit split second order requires transient BDF order: 1");
+    TEUCHOS_TEST_FOR_EXCEPTION(setnames.size() != 2, std::runtime_error,
+                               "Error: explicit split second order requires two physics sets, {E} then {B}");
+  }
   print_mass = settings->sublist("Solver").get<bool>("print mass",false);
   
   initial_type = settings->sublist("Solver").get<string>("initial type","L2-projection");
@@ -99,7 +113,7 @@ Comm(Comm_), settings(settings_), mesh(mesh_), disc(disc_), physics(physics_), a
   // Semi-implicit (averaged) loss term for explicit schemes, see setupAveragedLoss()
   // The default coefficient matches the 3D maxwell E residual, (sigma/eps) E; the 2D
   // maxwell residual has sigma E, and other physics need their own coefficient
-  averaged_loss = settings->sublist("Solver").get<bool>("averaged loss",false);
+  averaged_loss = settings->sublist("Solver").get<bool>("averaged loss",explicit_split_second_order);
   if (averaged_loss) {
     TEUCHOS_TEST_FOR_EXCEPTION(!fully_explicit, std::runtime_error,
                                "Error: averaged loss requires fully explicit: true");
@@ -165,6 +179,14 @@ Comm(Comm_), settings(settings_), mesh(mesh_), disc(disc_), physics(physics_), a
     maxBasis.push_back(set_maxBasis);
     
   }
+  if (explicit_split_second_order) {
+    for (size_t block=0; block<blocknames.size(); ++block) {
+      bool varsok = (varlist[0][block].size() == 1 && varlist[0][block][0] == "E" &&
+                     varlist[1][block].size() == 1 && varlist[1][block][0] == "B");
+      TEUCHOS_TEST_FOR_EXCEPTION(!varsok, std::runtime_error,
+                                 "Error: explicit split second order requires set 0 = {E} and set 1 = {B} on block " + blocknames[block]);
+    }
+  }
   
   // needed phase space information from the disc interface
   vector<vector<int> > phase_cards = disc->phase_cards;
@@ -228,6 +250,9 @@ Comm(Comm_), settings(settings_), mesh(mesh_), disc(disc_), physics(physics_), a
     // Check if there are settings unique to each set
     auto setSolverSettings = physics->solver_settings[set][0]; // [set][block]
 
+    if (explicit_split_second_order && set == 0 && !setSolverSettings.isParameter("transient Butcher tableau")) {
+      myButcherTab = "FWE-midpoint";
+    }
     myButcherTab = 
       setSolverSettings.get<string>("transient Butcher tableau",myButcherTab);
     myBDForder = 
@@ -262,6 +287,8 @@ Comm(Comm_), settings(settings_), mesh(mesh_), disc(disc_), physics(physics_), a
       }
     }
 
+    TEUCHOS_TEST_FOR_EXCEPTION(explicit_split_second_order && set == 1 && myButcherTab != "FWE", std::runtime_error,
+                               "Error: explicit split second order requires transient Butcher tableau: FWE on the B set");
     ButcherTab.push_back(myButcherTab);
     BDForder.push_back(myBDForder);
     startupButcherTab.push_back(myStartupButcherTab); 

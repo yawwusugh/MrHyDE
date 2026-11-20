@@ -1480,6 +1480,13 @@ void SolverManager<Node>::setButcherTableau(const vector<string> & tableau, cons
     tmp_butcher_b(0) = 1.0;
     tmp_butcher_c = Kokkos::View<ScalarT*,HostDevice>("butcher_c",1);
   }
+  else if (myTableau == "FWE-midpoint") { // forward Euler with the stage (source) time at t_n + dt/2
+    tmp_butcher_A = Kokkos::View<ScalarT**,HostDevice>("butcher_A",1,1);
+    tmp_butcher_b = Kokkos::View<ScalarT*,HostDevice>("butcher_b",1);
+    tmp_butcher_b(0) = 1.0;
+    tmp_butcher_c = Kokkos::View<ScalarT*,HostDevice>("butcher_c",1);
+    tmp_butcher_c(0) = 0.5;
+  }
   else if (myTableau == "CN") {
     tmp_butcher_A = Kokkos::View<ScalarT**,HostDevice>("tmp_butcher_A",2,2);
     tmp_butcher_A(1,0) = 0.5;
