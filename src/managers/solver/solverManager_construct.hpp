@@ -370,6 +370,16 @@ Comm(Comm_), settings(settings_), mesh(mesh_), disc(disc_), physics(physics_), a
       }
     }
   
+    // A fully explicit, matrix-free run allocates no overlapped graph, which the projected initial data needs
+    bool projected_initial = have_initial_conditions[set] && !scalarInitialData[set] &&
+                             (initial_type == "L2-projection" || initial_type == "L2-projection-HFACE");
+    TEUCHOS_TEST_FOR_EXCEPTION(projected_initial && fully_explicit &&
+                               settings->sublist("Solver").get<bool>("matrix free",false), std::runtime_error,
+                               "Error: initial type " + initial_type + " for physics set " + setnames[set] +
+                               " needs matrix free: false when fully explicit (or use scalar data: true)");
+
+    // scalarInitialValues is indexed by set, so every set gets an entry (empty unless scalar data)
+    scalarInitialValues.push_back(vector<vector<ScalarT> >());
     if (have_initial_conditions[set] && scalarInitialData[set]) {
       vector<vector<ScalarT> > setInitialValues;
       for (size_t block=0; block<blocknames.size(); ++block) {
@@ -388,7 +398,7 @@ Comm(Comm_), settings(settings_), mesh(mesh_), disc(disc_), physics(physics_), a
         }
         setInitialValues.push_back(blockInitialValues);
       }
-      scalarInitialValues.push_back(setInitialValues);
+      scalarInitialValues[set] = setInitialValues;
     }
     
   }

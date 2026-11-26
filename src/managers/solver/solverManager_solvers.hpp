@@ -63,13 +63,19 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
     }
     
     // Second-order E/B split: B^n (set 1) is stored half a step ahead of E^n, so the output and
-    // errors use Bhat^n = (B^{n-1} + B^n)/2, with Bhat^0 = B^0. The objectives and the stored
-    // states use the states as computed (the adjoint replays them).
+    // errors use Bhat^n = (B^{n-1} + B^n)/2, with Bhat^0 = B(0). The objectives and the stored
+    // states use the states as computed (the adjoint replays them). The stored B^0 starts with a
+    // half step, B(0) + (dt/2) M_B^{-1} r_B(E(0)), so that it approximates B(t_{1/2}).
     bool align_B = fully_explicit && explicit_split_second_order;
     vector<vector_RCP> sol_out = sol;
     if (align_B) {
       sol_out[1] = linalg->getNewOverlappedVector(1);
       sol_out[1]->assign(*(sol[1]));
+      // New vector: sol[1] may be the caller's initial or restart vector
+      vector_RCP B_half = linalg->getNewOverlappedVector(1);
+      B_half->assign(*(sol[1]));
+      this->explicitHalfStepB(sol[0], B_half);
+      sol[1] = B_half;
     }
     
     postproc->record(sol,current_time,0,sol_out);
@@ -919,6 +925,29 @@ void SolverManager<Node>::applyExplicitMassInverse(const size_t & set, vector_RC
 }
 
 // ========================================================================================
+// Initial half step of the second-order E/B split (Yee start): B += (dt/2) P M_B^{-1} P r_B(E, B),
+// with r_B evaluated as explicitSolver does for set 1 (stage = previous = B, so no time derivative)
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::explicitHalfStepB(vector_RCP & E_over, vector_RCP & B_over) {
+
+  // The worksets may not hold the stage, time and time step yet (they are set at each step)
+  assembler->updateStage(0, current_time, deltat);
+
+  vector_RCP r = linalg->getNewVector(1), du = linalg->getNewVector(1);
+  this->explicitLinearResidual(1, E_over, B_over, r, false);
+  this->applyExplicitMassInverse(1, r, du); // du = dt*b(0) P M_B^{-1} P r, with b(0) = 1 (FWE on B)
+
+  vector_RCP du_over = du;
+  if (linalg->getHaveOverlapped()) {
+    du_over = linalg->getNewOverlappedVector(1);
+    linalg->importVectorToOverlapped(1, du_over, du);
+  }
+  B_over->update(0.5, *du_over, 1.0);
+}
+
+// ========================================================================================
 // vec = P vec: zero the owned fixed (Dirichlet) DOFs of a set, as explicitSolver does to its residual
 // ========================================================================================
 
@@ -1050,6 +1079,8 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
 // applying P; mu_E vanishes on fixed DOFs. Dirichlet data do not depend on p, so they drop out.
 // Objective (integrated control, t=0 skipped):
 //   J = sum_{n=1}^N dt w int_obs 0.5 eps |E^n|^2 + 0.5/mu |B^n|^2.
+// With 'explicit split second order: true', the stored B^0 = B(0) + (dt/2) M_B^{-1} r_B(E(0))
+// (explicitHalfStepB) depends on neither p nor a later state, so the half step adds nothing to the sweep.
 // Backward sweep, n = N,...,1, with Ebar^{N+1} = Bbar^{N+1} = mu_E^{N+1} = 0:
 //   Bbar^n  = dJ/dB^n + Bbar^{n+1} - 1/(mu eps) r_B(mu_E^{n+1})          [= ... + 1/(mu eps) K^T mu_E]
 //   mu_B^n  = dt M_B^{-1} Bbar^n
@@ -1199,6 +1230,7 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   //                 conductive region; they differ because M_c uses element averages of sigma/eps and the mass
   //                 quadrature (Gauss-Lobatto when sparsified), while r_E has sigma at the residual's quadrature
   //                 points
+  //   half step:    stored B^0 - B(0) = (dt/2) M_B^{-1} r_B(E^0) (second-order split only)
   // With the stored forward states at n = N/2:
   //   forward step: E^{n+1} - E^n = dt M_E^{-1} r_E(E^n, B^n; p_n),  B^{n+1} - B^n = dt M_B^{-1} r_B(E^{n+1})
   //   objective:    <dJ/dE^n, E^n> + <dJ/dB^n, B^n> = 2 dt J_n  (J_n is quadratic)
@@ -1326,6 +1358,53 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
       q->norm2(nrm);
       lossDiff = nrm[0];
     }
+    // Initial half step (second-order split): stored B^0 = B(0) + (dt/2) M_B^{-1} r_B(E^0, B(0)) and stored
+    // E^0 = E(0), with E(0) and B(0) rebuilt from the initial conditions as transientSolver gets them
+    // (skipped on restart: setInitial then returns the restart vectors, which the forward has stepped in place)
+    ScalarT halfErr = 0.0, halfNorm = 0.0, initErrE = 0.0;
+    bool checkHalf = explicit_split_second_order && !use_restart;
+    if (checkHalf) {
+      bool adj = is_adjoint;
+      is_adjoint = false;
+      vector<vector_RCP> init = this->setInitial();
+      is_adjoint = adj;
+      if (usestrongDBCs) {
+        for (size_t set=0; set<2; ++set) {
+          assembler->updatePhysicsSet(set);
+          this->setDirichlet(set, init[set]);
+        }
+      }
+      vector_RCP E0 = linalg->getNewOverlappedVector(0), B0 = linalg->getNewOverlappedVector(1);
+      extractState(0, E0, 0);
+      extractState(1, B0, 0);
+      vector_RCP r = linalg->getNewVector(1), du = linalg->getNewVector(1);
+      this->explicitLinearResidual(1, E0, init[1], r, false);
+      this->applyExplicitMassInverse(1, r, du);
+      vector_RCP e = linalg->getNewVector(0), e0 = linalg->getNewVector(0);
+      vector_RCP b = linalg->getNewVector(1), b0 = linalg->getNewVector(1);
+      if (have_over) {
+        linalg->exportVectorFromOverlappedReplace(0, e, E0);
+        linalg->exportVectorFromOverlappedReplace(0, e0, init[0]);
+        linalg->exportVectorFromOverlappedReplace(1, b, B0);
+        linalg->exportVectorFromOverlappedReplace(1, b0, init[1]);
+      }
+      else {
+        e->assign(*E0);
+        e0->assign(*(init[0]));
+        b->assign(*B0);
+        b0->assign(*(init[1]));
+      }
+      Teuchos::Array<ScalarT> nrm(1);
+      e->update(-1.0, *e0, 1.0);
+      e->norm2(nrm);
+      initErrE = nrm[0];
+      b->update(-1.0, *b0, 1.0);
+      b->norm2(nrm);
+      halfNorm = nrm[0];
+      b->update(-0.5, *du, 1.0);
+      b->norm2(nrm);
+      halfErr = nrm[0];
+    }
     // Forward step and objective at n = N/2
     ScalarT stepErr[2] = {0.0, 0.0}, stepNorm[2] = {0.0, 0.0}, objCheck[2] = {0.0, 0.0};
     {
@@ -1411,6 +1490,10 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
       cout.precision(10);
       cout << endl << "[EXPLICIT-ADJOINT-CHECK] forward E step : |dE - dt M^-1 r_E| = " << stepErr[0] << "  |dE| = " << stepNorm[0] << endl;
       cout << "[EXPLICIT-ADJOINT-CHECK] forward B step : |dB - dt M^-1 r_B| = " << stepErr[1] << "  |dB| = " << stepNorm[1] << endl;
+      if (checkHalf) {
+        cout << "[EXPLICIT-ADJOINT-CHECK] half step      : |B^0 - B(0) - (dt/2) M_B^-1 r_B(E^0)| = " << halfErr
+             << "  |B^0 - B(0)| = " << halfNorm << "  |E^0 - E(0)| = " << initErrE << endl;
+      }
       cout << "[EXPLICIT-ADJOINT-CHECK] objective grad : " << objCheck[0] << "  " << objCheck[1] << "  rel diff " << rel(objCheck[0],objCheck[1]) << endl;
       cout << "[EXPLICIT-ADJOINT-CHECK] CFL number     : " << lam << "  (stable iff <= 4)"
            << (checkLoss ? "  (with M~_E)" : "") << endl;

@@ -315,6 +315,14 @@ public:
                               vector_RCP & res, const bool & linear_part = true,
                               vector_RCP p_over = Teuchos::null);
 
+  /**
+   * @brief Initial half step of the second-order E/B split: B += (dt/2) P M_B^{-1} P r_B(E, B),
+   *        so the stored B^0 approximates B(t_{1/2}), as every later B^n approximates B(t_{n+1/2}).
+   * @param[in] E_over Initial E (overlapped)
+   * @param[in,out] B_over Initial B on input, the staggered B^0 on output (overlapped)
+   */
+  void explicitHalfStepB(vector_RCP & E_over, vector_RCP & B_over);
+
   /** @brief Solve linearized state system */
   void stateSolve(vector<vector_RCP> &sol,const vector<vector_RCP> &forcing);
   
@@ -432,7 +440,7 @@ public:
   bool useL2proj;                // Use L2 projection for some operations
   bool discretized_stochastic;   // Whether stochastic parameters are discretized fields
   bool fully_explicit;           // True if scheme is fully explicit
-  bool explicit_split_second_order = false; // second-order E/B split: midpoint source and averaged loss on E
+  bool explicit_split_second_order = false; // second-order E/B split: midpoint source and averaged loss on E, Bhat in the output, initial half step on B
   bool use_custom_PCG;           // Use customized PCG instead of standard
   bool isInitial;                // Flags first iteration of transient solve
   bool isTransient;              // Indicates transient or steady solve
