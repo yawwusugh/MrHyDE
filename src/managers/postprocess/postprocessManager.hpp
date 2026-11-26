@@ -97,6 +97,18 @@ public:
               const int & stepnum);
   
   /**
+   * @brief Records solution fields, with separate states for storage and for output
+   * @param current_soln States stored for the adjoint, written by writeStateToFile and used for the
+   *                     objectives and responses
+   * @param current_time Current time value
+   * @param stepnum      Time step number
+   * @param output_soln  States used for the exodus output, errors, flux responses, integrated
+   *                     quantities, weighted norm and sensors
+   */
+  void record(vector<vector_RCP> & current_soln, const ScalarT & current_time,
+              const int & stepnum, vector<vector_RCP> & output_soln);
+  
+  /**
    * @brief Reports all collected postprocessing data
    */
   void report();

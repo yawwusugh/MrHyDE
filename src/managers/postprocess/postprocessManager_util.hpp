@@ -14,6 +14,18 @@
 template <class Node>
 void PostprocessManager<Node>::record(vector<vector_RCP> &current_soln, const ScalarT &current_time,
                                       const int &stepnum) {
+  this->record(current_soln, current_time, stepnum, current_soln);
+}
+
+// ========================================================================================
+// As above, but the exodus output, errors, flux responses, integrated quantities, weighted norm
+// and sensors use output_soln, while the objectives and responses, storage and writeStateToFile
+// keep current_soln
+// ========================================================================================
+
+template <class Node>
+void PostprocessManager<Node>::record(vector<vector_RCP> &current_soln, const ScalarT &current_time,
+                                      const int &stepnum, vector<vector_RCP> &output_soln) {
 
   // Determine if we want to collect QoI, objectives, etc.
   bool write_this_step = false;
@@ -30,7 +42,7 @@ void PostprocessManager<Node>::record(vector<vector_RCP> &current_soln, const Sc
   // Suppress exodus output during incremental (tangent) sweeps.
   if (!is_incremental && write_exodus_this_step && current_time + 1.0e-100 >= exodus_record_start && current_time - 1.0e-100 <= exodus_record_stop) {
     if (write_solution) {
-      this->writeSolution(current_soln, current_time);
+      this->writeSolution(output_soln, current_time);
     }
   }
 
@@ -38,22 +50,22 @@ void PostprocessManager<Node>::record(vector<vector_RCP> &current_soln, const Sc
   if (!is_incremental && write_this_step && current_time + 1.0e-100 >= record_start && current_time - 1.0e-100 <= record_stop) {
 
     if (compute_error) {
-      this->computeError(current_soln, current_time);
+      this->computeError(output_soln, current_time);
     }
     if (compute_response || compute_objective) {
       this->computeObjective(current_soln, current_time);
     }
     if (compute_flux_response) {
-      this->computeFluxResponse(current_soln, current_time);
+      this->computeFluxResponse(output_soln, current_time);
     }
     if (compute_integrated_quantities) {
-      this->computeIntegratedQuantities(current_soln, current_time);
+      this->computeIntegratedQuantities(output_soln, current_time);
     }
     if (compute_weighted_norm) {
-      this->computeWeightedNorm(current_soln);
+      this->computeWeightedNorm(output_soln);
     }
     if (store_sensor_solution) {
-      this->computeSensorSolution(current_soln, current_time);
+      this->computeSensorSolution(output_soln, current_time);
     }
   }
 

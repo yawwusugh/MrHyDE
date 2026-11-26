@@ -62,7 +62,17 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
       }
     }
     
-    postproc->record(sol,current_time,0);
+    // Second-order E/B split: B^n (set 1) is stored half a step ahead of E^n, so the output and
+    // errors use Bhat^n = (B^{n-1} + B^n)/2, with Bhat^0 = B^0. The objectives and the stored
+    // states use the states as computed (the adjoint replays them).
+    bool align_B = fully_explicit && explicit_split_second_order;
+    vector<vector_RCP> sol_out = sol;
+    if (align_B) {
+      sol_out[1] = linalg->getNewOverlappedVector(1);
+      sol_out[1]->assign(*(sol[1]));
+    }
+    
+    postproc->record(sol,current_time,0,sol_out);
     
     vector<vector<vector_RCP> > sol_prev;
     for (size_t set=0; set<sol.size(); ++set) {
@@ -164,10 +174,15 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
         current_time += deltat;
         stepProg += 1;
         multiscale_manager->completeTimeStep();
-        postproc->record(sol,current_time,stepProg);
+        if (align_B) { // sol_prev[1][0] holds B^{n-1}
+          sol_out[1]->update(0.5, *(sol_prev[1][0]), 0.5, *(sol[1]), 0.0);
+        }
+        postproc->record(sol,current_time,stepProg,sol_out);
         
       }
       else { // something went wrong, cut time step and try again
+        TEUCHOS_TEST_FOR_EXCEPTION(align_B, std::runtime_error,
+                                   "Error: explicit split second order requires a fixed time step (no time step cuts).");
         deltat *= 0.5;
         numCuts += 1;
         for (size_t set=0; set<sol.size(); ++set) {
@@ -185,7 +200,7 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
     }
     // If the final step doesn't fall when a write is requested, catch that here  
     if (stepProg % postproc->write_frequency != 0 && postproc->write_solution) {
-      postproc->writeSolution(sol, current_time);
+      postproc->writeSolution(sol_out, current_time);
     }
   }
   else if (fully_explicit) { // adjoint of the fully explicit E/B split (no AD)
