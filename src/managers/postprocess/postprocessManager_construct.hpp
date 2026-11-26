@@ -106,6 +106,20 @@ void PostprocessManager<Node>::setup() {
   record_start = settings->sublist("Postprocess").get("record start time", -DBL_MAX);
   record_stop = settings->sublist("Postprocess").get("record stop time", DBL_MAX);
   
+  // The second-order explicit split adds the E-only end terms of its objective at the first and last time step
+  if (settings->sublist("Solver").get<bool>("explicit split second order", false) && Comm->getRank() == 0) {
+    string keys;
+    if (write_frequency != 1) { keys += " write frequency = " + std::to_string(write_frequency); }
+    // compare with the defaults: the get() calls above have already added both keys to the list
+    if (record_start > -DBL_MAX) { keys += string(keys.empty() ? " " : ", ") + "record start time is set"; }
+    if (record_stop < DBL_MAX) { keys += string(keys.empty() ? " " : ", ") + "record stop time is set"; }
+    if (!keys.empty()) {
+      cout << "MrHyDE WARNING: explicit split second order assumes the objective is recorded at every time step, "
+           << "but in Postprocess" << keys << ". The objective then mixes the recorded steps with end terms at the "
+           << "first and last time step, and the explicit split adjoint gradient will not match it." << endl;
+    }
+  }
+  
   compute_integrated_quantities = settings->sublist("Postprocess").get("compute integrated quantities", false);
   
   compute_weighted_norm = settings->sublist("Postprocess").get<bool>("compute weighted norm", false);

@@ -63,9 +63,12 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
     }
     
     // Second-order E/B split: B^n (set 1) is stored half a step ahead of E^n, so the output and
-    // errors use Bhat^n = (B^{n-1} + B^n)/2, with Bhat^0 = B(0). The objectives and the stored
-    // states use the states as computed (the adjoint replays them). The stored B^0 starts with a
-    // half step, B(0) + (dt/2) M_B^{-1} r_B(E(0)), so that it approximates B(t_{1/2}).
+    // errors use Bhat^n = (B^{n-1} + B^n)/2, with Bhat^0 = B(0). The stored states stay as
+    // computed (the adjoint replays them). The stored B^0 starts with a half step,
+    // B(0) + (dt/2) M_B^{-1} r_B(E(0)), so that it approximates B(t_{1/2}).
+    // The objective at t_n (n >= 1) pairs E^n ~ E(t_n) with B^{n-1} ~ B(t_{n-1/2}), so the
+    // rectangle sum of reportObjective is a midpoint rule on B. On E it becomes the trapezoid
+    // rule with the end terms (dt/2) S_E(E^0) - (dt/2) S_E(E^N) (addEnergyEndTerm).
     bool align_B = fully_explicit && explicit_split_second_order;
     vector<vector_RCP> sol_out = sol;
     if (align_B) {
@@ -79,6 +82,13 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
     }
     
     postproc->record(sol,current_time,0,sol_out);
+    
+    // E-only end terms of the objective: S_E = 0.5 eps int_obs |E|^2 (the EM-energy objective)
+    bool end_terms = align_B && postproc->compute_objective && !postproc->is_incremental;
+    ScalarT eps_end = end_terms ? this->explicitSplitConstant("permittivity") : 1.0;
+    if (end_terms) {
+      postproc->addEnergyEndTerm(0, sol[0], 0.5*deltat*eps_end);
+    }
     
     vector<vector<vector_RCP> > sol_prev;
     for (size_t set=0; set<sol.size(); ++set) {
@@ -182,8 +192,12 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
         multiscale_manager->completeTimeStep();
         if (align_B) { // sol_prev[1][0] holds B^{n-1}
           sol_out[1]->update(0.5, *(sol_prev[1][0]), 0.5, *(sol[1]), 0.0);
+          vector<vector_RCP> sol_obj = {sol[0], sol_prev[1][0]};
+          postproc->record(sol,current_time,stepProg,sol_out,sol_obj);
         }
-        postproc->record(sol,current_time,stepProg,sol_out);
+        else {
+          postproc->record(sol,current_time,stepProg,sol_out);
+        }
         
       }
       else { // something went wrong, cut time step and try again
@@ -207,6 +221,9 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
     // If the final step doesn't fall when a write is requested, catch that here  
     if (stepProg % postproc->write_frequency != 0 && postproc->write_solution) {
       postproc->writeSolution(sol_out, current_time);
+    }
+    if (end_terms) {
+      postproc->addEnergyEndTerm(0, sol[0], -0.5*deltat*eps_end);
     }
   }
   else if (fully_explicit) { // adjoint of the fully explicit E/B split (no AD)
@@ -925,6 +942,37 @@ void SolverManager<Node>::applyExplicitMassInverse(const size_t & set, vector_RC
 }
 
 // ========================================================================================
+// A coefficient (permittivity, permeability) as one numeric constant over all blocks, as the
+// explicit split adjoint and the E-only end terms of its objective need
+// ========================================================================================
+
+template<class Node>
+ScalarT SolverManager<Node>::explicitSplitConstant(const string & name) {
+  ScalarT val = 0.0;
+  for (size_t block=0; block<blocknames.size(); ++block) {
+    Teuchos::ParameterList & funcs = settings->sublist("Functions");
+    Teuchos::ParameterList fs = funcs.isSublist(blocknames[block]) ? funcs.sublist(blocknames[block]) : funcs;
+    string sval = fs.get<string>(name,"1.0");
+    ScalarT bval = 0.0;
+    size_t pos = 0;
+    try {
+      bval = std::stod(sval, &pos);
+    }
+    catch (...) {
+      pos = 0;
+    }
+    TEUCHOS_TEST_FOR_EXCEPTION(pos == 0 || sval.find_first_not_of(" ", pos) != string::npos, std::runtime_error,
+                               "Error: the explicit split adjoint and objective require '" + name + "' to be a numeric constant, got '" + sval + "' on " + blocknames[block]);
+    if (block == 0) {
+      val = bval;
+    }
+    TEUCHOS_TEST_FOR_EXCEPTION(std::abs(bval-val) > 1.0e-12*std::abs(val), std::runtime_error,
+                               "Error: the explicit split adjoint and objective require '" + name + "' to be the same in every block.");
+  }
+  return val;
+}
+
+// ========================================================================================
 // Initial half step of the second-order E/B split (Yee start): B += (dt/2) P M_B^{-1} P r_B(E, B),
 // with r_B evaluated as explicitSolver does for set 1 (stage = previous = B, so no time derivative)
 // ========================================================================================
@@ -1079,8 +1127,12 @@ void SolverManager<Node>::explicitLinearResidual(const size_t & set, vector_RCP 
 // applying P; mu_E vanishes on fixed DOFs. Dirichlet data do not depend on p, so they drop out.
 // Objective (integrated control, t=0 skipped):
 //   J = sum_{n=1}^N dt w int_obs 0.5 eps |E^n|^2 + 0.5/mu |B^n|^2.
-// With 'explicit split second order: true', the stored B^0 = B(0) + (dt/2) M_B^{-1} r_B(E(0))
-// (explicitHalfStepB) depends on neither p nor a later state, so the half step adds nothing to the sweep.
+// With 'explicit split second order: true', B^n ~ B(t_{n+1/2}) and J takes the leapfrog time rule,
+// the trapezoid rule on E and the midpoint rule on B (see transientSolver):
+//   J = sum_{n=0}^N w_n w int_obs 0.5 eps |E^n|^2 + sum_{m=0}^{N-1} dt w int_obs 0.5/mu |B^m|^2,
+// with the time weights w_0 = w_N = dt/2, w_n = dt otherwise (w alone is the objective weight), so dJ/dE^n = g_E(w_n E^n) and dJ/dB^n = [n<N] g_B(dt B^n). The
+// n = 0 terms hold E^0 and the stored B^0 = B(0) + (dt/2) M_B^{-1} r_B(E(0)) (explicitHalfStepB), which
+// depend on neither p nor a later state, so they and the half step add nothing to the sweep.
 // Backward sweep, n = N,...,1, with Ebar^{N+1} = Bbar^{N+1} = mu_E^{N+1} = 0:
 //   Bbar^n  = dJ/dB^n + Bbar^{n+1} - 1/(mu eps) r_B(mu_E^{n+1})          [= ... + 1/(mu eps) K^T mu_E]
 //   mu_B^n  = dt M_B^{-1} Bbar^n
@@ -1144,32 +1196,8 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   }
 
   // eps and mu must be the same numeric constant in every block (C = K^T up to 1/(mu eps))
-  auto blockConstant = [&](const string & name) {
-    ScalarT val = 0.0;
-    for (size_t block=0; block<blocknames.size(); ++block) {
-      Teuchos::ParameterList & funcs = settings->sublist("Functions");
-      Teuchos::ParameterList fs = funcs.isSublist(blocknames[block]) ? funcs.sublist(blocknames[block]) : funcs;
-      string sval = fs.get<string>(name,"1.0");
-      ScalarT bval = 0.0;
-      size_t pos = 0;
-      try {
-        bval = std::stod(sval, &pos);
-      }
-      catch (...) {
-        pos = 0;
-      }
-      TEUCHOS_TEST_FOR_EXCEPTION(pos == 0 || sval.find_first_not_of(" ", pos) != string::npos, std::runtime_error,
-                                 "Error: the explicit adjoint requires '" + name + "' to be a numeric constant, got '" + sval + "' on " + blocknames[block]);
-      if (block == 0) {
-        val = bval;
-      }
-      TEUCHOS_TEST_FOR_EXCEPTION(std::abs(bval-val) > 1.0e-12*std::abs(val), std::runtime_error,
-                                 "Error: the explicit adjoint requires '" + name + "' to be the same in every block.");
-    }
-    return val;
-  };
-  ScalarT eps = blockConstant("permittivity");
-  ScalarT mu = blockConstant("permeability");
+  ScalarT eps = this->explicitSplitConstant("permittivity");
+  ScalarT mu = this->explicitSplitConstant("permeability");
 
   // Second-order adjoint: the sweep runs on the tangent states
   bool incremental = postproc->is_incremental_adjoint;
@@ -1218,6 +1246,11 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   muE_next_over->putScalar(0.0);
   zero_B_over->putScalar(0.0);
 
+  // Weight of E^n (n >= 1) in J: dt, or dt/2 at n = N with the second-order split (trapezoid rule on E)
+  auto wE = [&](const size_t & m) -> ScalarT {
+    return (explicit_split_second_order && m == numFwdSteps) ? 0.5*deltat : deltat;
+  };
+
   // Optional checks ('explicit adjoint operator check: true' in Solver) of what the sweep relies on,
   // run with the gradient only (the forward states and objective values belong to the first-order sweep).
   // With random vectors x, y, d (and a, b in either set):
@@ -1233,7 +1266,8 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   //   half step:    stored B^0 - B(0) = (dt/2) M_B^{-1} r_B(E^0) (second-order split only)
   // With the stored forward states at n = N/2:
   //   forward step: E^{n+1} - E^n = dt M_E^{-1} r_E(E^n, B^n; p_n),  B^{n+1} - B^n = dt M_B^{-1} r_B(E^{n+1})
-  //   objective:    <dJ/dE^n, E^n> + <dJ/dB^n, B^n> = 2 dt J_n  (J_n is quadratic)
+  //   objective:    <dJ/dE^n, E^n> + <dJ/dB^n, B^n> = 2 dt J_n  (J_n is quadratic; with the second-order
+  //                 split the record at t_n holds B^{n-1}, so B^n reads B^{n-1} there for n > 0)
   // and, after the sweep, a tangent test of the whole adjoint (see below).
   if (!incremental && settings->sublist("Solver").get<bool>("explicit adjoint operator check",false)) {
     // Random states are zero on fixed DOFs, like the forward states (rows of fixed DOFs are not
@@ -1422,15 +1456,21 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
         vector_RCP Eo = linalg->getNewVector(0), Bo = linalg->getNewVector(1);
         gE->putScalar(0.0);
         gB->putScalar(0.0);
+        // The record at t_n pairs E^n with B^{n-1} with the second-order split (n > 0)
+        vector_RCP Bn_obj = Bn;
+        if (explicit_split_second_order && n > 0) {
+          Bn_obj = linalg->getNewOverlappedVector(1);
+          extractState(1, Bn_obj, n-1);
+        }
         postproc->addEnergyObjectiveGradState(0, En, deltat*eps, gE);
-        postproc->addEnergyObjectiveGradState(1, Bn, deltat/mu, gB);
+        postproc->addEnergyObjectiveGradState(1, Bn_obj, deltat/mu, gB);
         if (have_over) {
           linalg->exportVectorFromOverlappedReplace(0, Eo, En);
-          linalg->exportVectorFromOverlappedReplace(1, Bo, Bn);
+          linalg->exportVectorFromOverlappedReplace(1, Bo, Bn_obj);
         }
         else {
           Eo->assign(*En);
-          Bo->assign(*Bn);
+          Bo->assign(*Bn_obj);
         }
         objCheck[0] = dotp(gE, Eo) + dotp(gB, Bo);
         // The record at t_n also holds the regularization of slot n-1 (quadratic: <R'(p),p> = 2R(p))
@@ -1530,8 +1570,11 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
     assembler->updateStage(0, current_time, deltat);
 
     // Bbar^n = dJ/dB^n + Bbar^{n+1} - 1/(mu eps) r_B(mu_E^{n+1})
+    // (second-order split: B^n enters J at the record t_{n+1}, so B^N does not enter)
     Bbar->putScalar(0.0);
-    postproc->addEnergyObjectiveGradState(1, B_n, deltat/mu, Bbar);
+    if (!explicit_split_second_order || n < numFwdSteps) {
+      postproc->addEnergyObjectiveGradState(1, B_n, deltat/mu, Bbar);
+    }
     Bbar->update(1.0, *Bbar_next, 1.0);
     this->explicitLinearResidual(1, muE_next_over, zero_B_over, resB);
     Bbar->update(-1.0/(mu*eps), *resB, 1.0);
@@ -1543,7 +1586,7 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
 
     // Ebar^n = dJ/dE^n + Ebar^{n+1} + r_E^lin(mu_E^{n+1}, -mu eps mu_B^n)
     Ebar->putScalar(0.0);
-    postproc->addEnergyObjectiveGradState(0, E_n, deltat*eps, Ebar);
+    postproc->addEnergyObjectiveGradState(0, E_n, wE(n)*eps, Ebar);
     Ebar->update(1.0, *Ebar_next, 1.0);
     muB_over->scale(-mu*eps);
     this->explicitLinearResidual(0, muE_next_over, muB_over, resE);
@@ -1586,7 +1629,7 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
     vector_RCP dE_over = linalg->getNewOverlappedVector(0), dB_over = linalg->getNewOverlappedVector(1);
     vector_RCP zero_E_over = linalg->getNewOverlappedVector(0);
     vector_RCP du = linalg->getNewVector(0), dub = linalg->getNewVector(1), tmpE = linalg->getNewVector(0);
-    vector_RCP gE = linalg->getNewVector(0), gB = linalg->getNewVector(1);
+    vector_RCP gE = linalg->getNewVector(0), gB = linalg->getNewVector(1), dB_prev = linalg->getNewVector(1);
     vector_RCP dp = linalg->getNewParamVector(), dp_over = linalg->getNewOverlappedParamVector();
     dE->putScalar(0.0);
     dB->putScalar(0.0);
@@ -1625,16 +1668,18 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
       toOverlapped(0, dE_over, dE);
       this->explicitLinearResidual(1, dE_over, zero_B_over, resB);
       this->applyExplicitMassInverse(1, resB, dub);
+      dB_prev->assign(*dB);
       dB->update(1.0, *dub, 1.0);
       toOverlapped(1, dB_over, dB);
 
+      // The record at t_{n+1}: E^{n+1} with B^{n+1}, or with B^n (tangent dB^n) with the second-order split
       extractState(0, E_n, n+1);
-      extractState(1, B_n, n+1);
+      extractState(1, B_n, explicit_split_second_order ? n : n+1);
       gE->putScalar(0.0);
       gB->putScalar(0.0);
-      postproc->addEnergyObjectiveGradState(0, E_n, deltat*eps, gE);
+      postproc->addEnergyObjectiveGradState(0, E_n, wE(n+1)*eps, gE);
       postproc->addEnergyObjectiveGradState(1, B_n, deltat/mu, gB);
-      ScalarT jterm = dotp(gE, dE) + dotp(gB, dB);
+      ScalarT jterm = dotp(gE, dE) + dotp(gB, explicit_split_second_order ? dB_prev : dB);
       dJ += jterm;
       dJabs += std::abs(jterm);
     }

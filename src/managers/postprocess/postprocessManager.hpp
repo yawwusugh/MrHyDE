@@ -109,6 +109,14 @@ public:
               const int & stepnum, vector<vector_RCP> & output_soln);
   
   /**
+   * @brief As above, with a third list of states for the objectives and responses
+   * @param objective_soln States used for the objectives and responses
+   */
+  void record(vector<vector_RCP> & current_soln, const ScalarT & current_time,
+              const int & stepnum, vector<vector_RCP> & output_soln,
+              vector<vector_RCP> & objective_soln);
+  
+  /**
    * @brief Reports all collected postprocessing data
    */
   void report();
@@ -350,6 +358,17 @@ public:
    */
   void addEnergyObjectiveGradState(const size_t & set, vector_RCP & sol, const ScalarT & scale,
                                    vector_RCP & grad);
+
+  /**
+   * @brief AD-free end-point term of the EM-energy objective (explicit split, second order): adds
+   *        weight*scale*int_block |u|^2/2 to objective_end_term of every integrated control objective with
+   *        a nonzero weight (summed over ranks), as addEnergyObjectiveGradState differentiates it.
+   *
+   * @param[in] set   Physics set (single vector-valued variable).
+   * @param[in] sol   State of the set (overlapped).
+   * @param[in] scale Time weight times the coefficient of |u|^2/2 (e.g. +-dt/2 eps).
+   */
+  void addEnergyEndTerm(const size_t & set, vector_RCP & sol, const ScalarT & scale);
 
   /**
    * @brief AD-free control transpose (explicit split adjoint): sens = scale*int curl(phi_k).mu_E over the

@@ -26,6 +26,17 @@ void PostprocessManager<Node>::record(vector<vector_RCP> &current_soln, const Sc
 template <class Node>
 void PostprocessManager<Node>::record(vector<vector_RCP> &current_soln, const ScalarT &current_time,
                                       const int &stepnum, vector<vector_RCP> &output_soln) {
+  this->record(current_soln, current_time, stepnum, output_soln, current_soln);
+}
+
+// ========================================================================================
+// As above, but the objectives and responses use objective_soln
+// ========================================================================================
+
+template <class Node>
+void PostprocessManager<Node>::record(vector<vector_RCP> &current_soln, const ScalarT &current_time,
+                                      const int &stepnum, vector<vector_RCP> &output_soln,
+                                      vector<vector_RCP> &objective_soln) {
 
   // Determine if we want to collect QoI, objectives, etc.
   bool write_this_step = false;
@@ -53,7 +64,7 @@ void PostprocessManager<Node>::record(vector<vector_RCP> &current_soln, const Sc
       this->computeError(output_soln, current_time);
     }
     if (compute_response || compute_objective) {
-      this->computeObjective(current_soln, current_time);
+      this->computeObjective(objective_soln, current_time);
     }
     if (compute_flux_response) {
       this->computeFluxResponse(output_soln, current_time);

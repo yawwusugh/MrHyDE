@@ -157,6 +157,7 @@ namespace MrHyDE {
     bool save_data, is_transient;
     vector<regularization> regularizations;
     vector<ScalarT> response_times, objective_times, objective_values;
+    ScalarT objective_end_term = 0.0; // global (summed over ranks) end-point terms added to the time integral
     vector<ScalarT> objective_unweighted_self; // magnitude-check only
     vector<vector<ScalarT>> regularization_unweighted; // magnitude-check only
     vector<ScalarT> scalar_response_data; // [time] or [realization]

@@ -1827,6 +1827,85 @@ void PostprocessManager<Node>::addEnergyObjectiveGradState(const size_t & set, v
 }
 
 // ========================================================================================
+// AD-free end-point term of the EM-energy objective (explicit split, second order)
+// ========================================================================================
+
+template <class Node>
+void PostprocessManager<Node>::addEnergyEndTerm(const size_t & set, vector_RCP & sol, const ScalarT & scale)
+{
+  
+  debugger->print(1, "******** Starting PostprocessManager::addEnergyEndTerm ...");
+  
+  typedef typename Node::device_type LA_device;
+  typedef typename Node::execution_space LA_exec;
+  bool data_avail = Kokkos::SpaceAccessibility<LA_exec, AssemblyDevice::memory_space>::accessible;
+  TEUCHOS_TEST_FOR_EXCEPTION(!data_avail, std::runtime_error,
+                             "Error: addEnergyEndTerm requires the LA and assembly devices to share memory.");
+  
+  auto sol_kv = sol->template getLocalView<LA_device>(Tpetra::Access::ReadWrite);
+  auto u_vec = Kokkos::subview(sol_kv, Kokkos::ALL(), 0);
+  
+  // The same objectives and integrand as addEnergyObjectiveGradState: weight*scale*int |u|^2/2
+  vector<ScalarT> local(objectives.size(), 0.0), global(objectives.size(), 0.0);
+  for (size_t r = 0; r < objectives.size(); ++r) {
+    if (objectives[r].type == "integrated control" && objectives[r].weight != 0.0) {
+
+      size_t block = objectives[r].block;
+      if (assembler->groups[block].size() == 0) { // no elements of this block on this rank
+        continue;
+      }
+      auto wset = assembler->wkset[block];
+      TEUCHOS_TEST_FOR_EXCEPTION(wset->set_varlist[set].size() != 1, std::runtime_error,
+                                 "Error: addEnergyEndTerm requires one variable in the physics set.");
+      
+      for (size_t grp = 0; grp < assembler->groups[block].size(); ++grp) {
+        
+        assembler->updateWorkset(block, grp, 0, 0, true);
+        
+        auto basis = wset->basis[wset->set_usebasis[set][0]];
+        auto wts = wset->wts;
+        auto off = Kokkos::subview(wset->set_offsets[set], 0, Kokkos::ALL());
+        auto LIDs = assembler->groups[block][grp]->LIDs[set];
+        size_type numdof = basis.extent(1);
+        size_type numip = basis.extent(2);
+        size_type dim = basis.extent(3);
+        
+        Kokkos::View<ScalarT[1], AssemblyDevice> usum("energy end term sum");
+        parallel_for("explicit split energy end term",
+                     RangePolicy<AssemblyExec>(0,LIDs.extent(0)),
+                     MRHYDE_LAMBDA (const int elem ) {
+          ScalarT val = 0.0;
+          for (size_type pt=0; pt<numip; ++pt) {
+            ScalarT u[3] = {0.0, 0.0, 0.0};
+            for (size_type j=0; j<numdof; ++j) {
+              ScalarT uj = u_vec(LIDs(elem,off(j)));
+              for (size_type d=0; d<dim; ++d) {
+                u[d] += uj*basis(elem,j,pt,d);
+              }
+            }
+            for (size_type d=0; d<dim; ++d) {
+              val += u[d]*u[d]*wts(elem,pt);
+            }
+          }
+          Kokkos::atomic_add(&(usum(0)), val);
+        });
+        auto usum_host = Kokkos::create_mirror_view(usum);
+        Kokkos::deep_copy(usum_host, usum);
+        local[r] += 0.5*objectives[r].weight*scale*usum_host(0);
+      }
+    }
+  }
+  if (!objectives.empty()) {
+    Teuchos::reduceAll(*Comm, Teuchos::REDUCE_SUM, (int)objectives.size(), local.data(), global.data());
+  }
+  for (size_t r = 0; r < objectives.size(); ++r) {
+    objectives[r].objective_end_term += global[r];
+  }
+  
+  debugger->print(1, "******** Finished PostprocessManager::addEnergyEndTerm");
+}
+
+// ========================================================================================
 // AD-free control transpose F^T mu_E (explicit split adjoint)
 // ========================================================================================
 

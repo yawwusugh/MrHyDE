@@ -658,6 +658,7 @@ void PostprocessManager<Node>::reportObjective(ScalarT &objectiveval)
         }
         value += gcontrib;
       }
+      value += objectives[r].objective_end_term; // already summed over ranks
     }
     if (objectives[r].type == "integrated response")
     {
@@ -732,6 +733,9 @@ void PostprocessManager<Node>::reportUnweightedMagnitudes()
   vector<Row> obj_rows, reg_rows;
   for (size_t r = 0; r < objectives.size(); ++r) {
     ScalarT g = integrate(objectives[r].objective_unweighted_self, r);
+    if (objectives[r].weight != 0.0 && objectives[r].objective_times.size() > 1) {
+      g += objectives[r].objective_end_term/objectives[r].weight;
+    }
     if (objectives[r].type == "integrated response") {
       ScalarT diff = g - objectives[r].target;
       g = diff * diff;
@@ -819,6 +823,7 @@ void PostprocessManager<Node>::resetObjectives()
     objectives[r].objective_times.clear();
     objectives[r].objective_values.clear();
     objectives[r].objective_unweighted_self.clear();
+    objectives[r].objective_end_term = 0.0;
     for (auto & v : objectives[r].regularization_unweighted) {
       v.clear();
     }

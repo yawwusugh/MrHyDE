@@ -323,6 +323,13 @@ public:
    */
   void explicitHalfStepB(vector_RCP & E_over, vector_RCP & B_over);
 
+  /**
+   * @brief A coefficient (e.g. permittivity, permeability) as one numeric constant over all blocks
+   *        (throws otherwise), as the explicit split adjoint and the E-only end terms of its objective need
+   * @param[in] name Function name in the Functions list (default 1.0)
+   */
+  ScalarT explicitSplitConstant(const string & name);
+
   /** @brief Solve linearized state system */
   void stateSolve(vector<vector_RCP> &sol,const vector<vector_RCP> &forcing);
   
@@ -440,7 +447,7 @@ public:
   bool useL2proj;                // Use L2 projection for some operations
   bool discretized_stochastic;   // Whether stochastic parameters are discretized fields
   bool fully_explicit;           // True if scheme is fully explicit
-  bool explicit_split_second_order = false; // second-order E/B split: midpoint source and averaged loss on E, Bhat in the output, initial half step on B
+  bool explicit_split_second_order = false; // second-order E/B split: midpoint source and averaged loss on E, Bhat in the output, initial half step on B, leapfrog time rule in J (trapezoid on E, midpoint on B)
   bool use_custom_PCG;           // Use customized PCG instead of standard
   bool isInitial;                // Flags first iteration of transient solve
   bool isTransient;              // Indicates transient or steady solve
