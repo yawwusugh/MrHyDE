@@ -107,7 +107,8 @@ void SolverManager<Node>::adjointModel(MrHyDE_OptVector & gradient) {
 
   // Revolve checkpointing owns both the forward recomputation and the reverse
   // sweep, so it replaces this whole routine rather than sitting inside it.
-  if (use_checkpointing && solver_type == "transient") {
+  // The fully explicit adjoint (explicitSplitAdjoint) does its own checkpointing.
+  if (use_checkpointing && solver_type == "transient" && !fully_explicit) {
     this->checkpointedAdjointModel(gradient);
     debugger->print("**** Finished SolverManager::adjointModel");
     return;
@@ -209,8 +210,12 @@ void SolverManager<Node>::incrementalForwardModel(MrHyDE_OptVector & v) {
     this->steadySolver(w);
   }
   else if (solver_type == "transient") {
-    MrHyDE_OptVector dummy_gradient;
-    this->transientSolver(w, dummy_gradient, initial_time, final_time);
+    // With checkpointing, explicitSplitAdjoint recomputes the tangent states itself, so a sweep here
+    // would store nothing and compute nothing that is used
+    if (!(use_checkpointing && fully_explicit)) {
+      MrHyDE_OptVector dummy_gradient;
+      this->transientSolver(w, dummy_gradient, initial_time, final_time);
+    }
   }
 
   debugger->print("**** Finished SolverManager::incrementalForwardModel");
@@ -246,6 +251,13 @@ void SolverManager<Node>::incrementalAdjointModel(MrHyDE_OptVector & hessvec) {
     std::unique_ptr<ScalarParamGuard<decltype(params)>> trk_guard;
     if (params->isParameter("trk_gate")) {
       trk_guard = std::make_unique<ScalarParamGuard<decltype(params)>>(params, "trk_gate");
+    }
+
+    // With checkpointing, explicitSplitAdjoint recomputes the tangent states, which need the
+    // tangent right-hand side of incrementalForwardModel: control v, physical source off
+    std::unique_ptr<ScalarParamGuard<decltype(params)>> src_guard;
+    if (use_checkpointing && fully_explicit && solver_type == "transient") {
+      src_guard = std::make_unique<ScalarParamGuard<decltype(params)>>(params, "src_gate");
     }
 
     params->sacadoizeParams(false);

@@ -130,31 +130,30 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
   if (!is_adjoint) { // forward solve - adaptive time stepping
     is_final_time = false;
     vector<vector_RCP> sol = initial;
-    
-    if (usestrongDBCs) {
-      for (size_t set=0; set<initial.size(); ++set) {
-        assembler->updatePhysicsSet(set);
-        this->setDirichlet(set,sol[set]);
-      }
-    }
-    
+
     // Second-order E/B split: B^n (set 1) is stored half a step ahead of E^n, so the output and
     // errors use Bhat^n = (B^{n-1} + B^n)/2, with Bhat^0 = B(0). The stored states stay as
     // computed (the adjoint replays them). The stored B^0 starts with a half step,
-    // B(0) + (dt/2) M_B^{-1} r_B(E(0)), so that it approximates B(t_{1/2}).
+    // B(0) + (dt/2) M_B^{-1} r_B(E(0)), so that it approximates B(t_{1/2}) (setForwardStartState).
     // The objective at t_n (n >= 1) pairs E^n ~ E(t_n) with B^{n-1} ~ B(t_{n-1/2}), so the
     // rectangle sum of reportObjective is a midpoint rule on B. On E it becomes the trapezoid
     // rule with the end terms (dt/2) S_E(E^0) - (dt/2) S_E(E^N) (addEnergyEndTerm).
     bool align_B = fully_explicit && explicit_split_second_order;
     vector<vector_RCP> sol_out = sol;
-    if (align_B) {
+    this->setForwardStartState(sol);
+    if (align_B) { // initial[1] still holds B(0), with its Dirichlet values
       sol_out[1] = linalg->getNewOverlappedVector(1);
-      sol_out[1]->assign(*(sol[1]));
-      // New vector: sol[1] may be the caller's initial or restart vector
-      vector_RCP B_half = linalg->getNewOverlappedVector(1);
-      B_half->assign(*(sol[1]));
-      this->explicitHalfStepB(sol[0], B_half);
-      sol[1] = B_half;
+      sol_out[1]->assign(*(initial[1]));
+    }
+    // The checkpointed explicit adjoint restarts from this copy rather than calling setInitial again:
+    // the sweep steps sol in place, and a second L2 projection of the initial data can differ in the
+    // last bits (and shifts the iterative solver's history for later projections)
+    if (use_checkpointing && fully_explicit && !postproc->is_incremental) {
+      forward_start_state.clear();
+      for (size_t set=0; set<sol.size(); ++set) {
+        forward_start_state.push_back(linalg->getNewOverlappedVector(set));
+        forward_start_state[set]->assign(*(sol[set]));
+      }
     }
     
     postproc->record(sol,current_time,0,sol_out);
@@ -226,10 +225,11 @@ void SolverManager<Node>::transientSolver(vector<vector_RCP> & initial,
           cout << "**** Current time is " << current_time << endl << endl;
           cout << "*******************************************************" << endl << endl << endl;
         }
-        
+
       }
     }
-    // If the final step doesn't fall when a write is requested, catch that here  
+    forward_step_cut = (numCuts > 0);
+    // If the final step doesn't fall when a write is requested, catch that here
     if (stepProg % postproc->write_frequency != 0 && postproc->write_solution) {
       postproc->writeSolution(sol_out, current_time);
     }
@@ -1007,6 +1007,28 @@ void SolverManager<Node>::explicitHalfStepB(vector_RCP & E_over, vector_RCP & B_
 }
 
 // ========================================================================================
+// Start state of a forward sweep (see the declaration)
+// ========================================================================================
+
+template<class Node>
+void SolverManager<Node>::setForwardStartState(vector<vector_RCP> & sol) {
+
+  if (usestrongDBCs) {
+    for (size_t set=0; set<sol.size(); ++set) {
+      assembler->updatePhysicsSet(set);
+      this->setDirichlet(set,sol[set]);
+    }
+  }
+  if (fully_explicit && explicit_split_second_order) {
+    // New vector: sol[1] may be the caller's initial or restart vector
+    vector_RCP B_half = linalg->getNewOverlappedVector(1);
+    B_half->assign(*(sol[1]));
+    this->explicitHalfStepB(sol[0], B_half);
+    sol[1] = B_half;
+  }
+}
+
+// ========================================================================================
 // vec = P vec: zero the owned fixed (Dirichlet) DOFs of a set, as explicitSolver does to its residual
 // ========================================================================================
 
@@ -1214,13 +1236,40 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
   bool incremental = postproc->is_incremental_adjoint;
   auto & soln_source = incremental ? postproc->incr_soln : postproc->soln;
   int store_index = 0;
-  size_t numFwdSteps = soln_source[0]->getTotalTimes(store_index)-1;
-  TEUCHOS_TEST_FOR_EXCEPTION(soln_source[1]->getTotalTimes(store_index)-1 != numFwdSteps, std::runtime_error,
-                             "Error: the explicit adjoint requires the forward solution of both sets at every time step.");
-  for (size_t n=1; n<=numFwdSteps; ++n) {
-    ScalarT dtn = soln_source[0]->getSpecificTime(store_index, n) - soln_source[0]->getSpecificTime(store_index, n-1);
-    TEUCHOS_TEST_FOR_EXCEPTION(std::abs(dtn-deltat) > 1.0e-8*deltat, std::runtime_error,
+  size_t numFwdSteps = 0;
+  if (use_checkpointing) {
+    // Nothing is stored: the states are recomputed from checkpoints (see "forward states" below)
+    TEUCHOS_TEST_FOR_EXCEPTION(forward_step_cut, std::runtime_error,
                                "Error: the explicit adjoint requires a fixed time step (no time step cuts).");
+    TEUCHOS_TEST_FOR_EXCEPTION(use_restart, std::runtime_error,
+                               "Error: the checkpointed explicit adjoint does not support a restart solution "
+                               "(the forward sweep steps the restart vectors in place).");
+    TEUCHOS_TEST_FOR_EXCEPTION(settings->sublist("Solver").get<bool>("explicit adjoint operator check",false), std::runtime_error,
+                               "Error: 'explicit adjoint operator check' reads the stored forward states, so it does not "
+                               "work with 'forward state recovery type: checkpointing'.");
+    TEUCHOS_TEST_FOR_EXCEPTION(multiscale_manager->subgridModels.size() > 0, std::runtime_error,
+                               "Error: the checkpointed explicit adjoint does not support subgrid models.");
+    TEUCHOS_TEST_FOR_EXCEPTION(num_checkpoints < 1, std::runtime_error,
+                               "Error: 'Analysis: number of checkpoints' must be at least 1.");
+    // Count the steps as the loop of transientSolver takes them
+    const ScalarT timetol = final_time*1.0e-6;
+    ScalarT step_time = initial_time;
+    while (step_time < final_time - timetol) {
+      step_time += deltat;
+      ++numFwdSteps;
+    }
+    TEUCHOS_TEST_FOR_EXCEPTION(numFwdSteps < 1, std::runtime_error,
+                               "Error: the checkpointed explicit adjoint needs at least one time step.");
+  }
+  else {
+    numFwdSteps = soln_source[0]->getTotalTimes(store_index)-1;
+    TEUCHOS_TEST_FOR_EXCEPTION(soln_source[1]->getTotalTimes(store_index)-1 != numFwdSteps, std::runtime_error,
+                               "Error: the explicit adjoint requires the forward solution of both sets at every time step.");
+    for (size_t n=1; n<=numFwdSteps; ++n) {
+      ScalarT dtn = soln_source[0]->getSpecificTime(store_index, n) - soln_source[0]->getSpecificTime(store_index, n-1);
+      TEUCHOS_TEST_FOR_EXCEPTION(std::abs(dtn-deltat) > 1.0e-8*deltat, std::runtime_error,
+                                 "Error: the explicit adjoint requires a fixed time step (no time step cuts).");
+    }
   }
 
   // ---------------------------- helpers ----------------------------
@@ -1560,6 +1609,131 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
     }
   }
 
+  // ---------------------------- forward states ----------------------------
+
+  // The sweep needs the forward state (E^n, B^n) and its time t_n for n = N, N-1, ..., 1, in that order.
+  // Stored: read it back. Checkpointed: a Revolve (Algorithm 799) schedule keeps num_checkpoints states and
+  // recomputes the others from the nearest one, starting from the copy the forward sweep kept of its start
+  // state (forward_start_state), or for the tangent sweep from zero through setForwardStartState, as the
+  // tangent forward starts. The recomputed steps repeat the forward operations in the same order, so the
+  // states are the forward ones bit for bit.
+  std::unique_ptr<Revolve> schedule;
+  vector<vector_RCP> carried, stepped;    // [set]: state at the schedule's position, and one step past it
+  vector<vector<vector_RCP> > step_prev;  // [set][step]: step history for takeForwardStep
+  vector<vector<vector_RCP> > ckpt;       // [slot][set]
+  vector<ScalarT> ckpt_time;
+  ScalarT carried_time = initial_time;
+  if (use_checkpointing) {
+    schedule = std::make_unique<Revolve>(static_cast<int>(numFwdSteps), num_checkpoints);
+    ckpt.resize(num_checkpoints);
+    ckpt_time.assign(num_checkpoints, initial_time);
+    for (int slot=0; slot<num_checkpoints; ++slot) {
+      for (size_t set=0; set<setnames.size(); ++set) {
+        ckpt[slot].push_back(linalg->getNewOverlappedVector(set));
+      }
+    }
+    for (size_t set=0; set<setnames.size(); ++set) {
+      stepped.push_back(linalg->getNewOverlappedVector(set));
+      vector<vector_RCP> c_prev;
+      for (int step=0; step<maxnumsteps[set]; ++step) {
+        c_prev.push_back(linalg->getNewOverlappedVector(set));
+      }
+      step_prev.push_back(c_prev);
+    }
+    if (incremental) {
+      // The tangent sweep starts from zero (incrementalForwardModel), then gets the same start treatment
+      bool adj = is_adjoint;
+      is_adjoint = false;
+      current_time = initial_time;
+      for (size_t set=0; set<setnames.size(); ++set) {
+        carried.push_back(linalg->getNewOverlappedVector(set));
+        carried[set]->putScalar(0.0);
+      }
+      this->setForwardStartState(carried);
+      is_adjoint = adj;
+    }
+    else {
+      TEUCHOS_TEST_FOR_EXCEPTION(forward_start_state.size() != setnames.size(), std::runtime_error,
+                                 "Error: the checkpointed explicit adjoint found no start state from a forward sweep.");
+      for (size_t set=0; set<setnames.size(); ++set) {
+        carried.push_back(linalg->getNewOverlappedVector(set));
+        carried[set]->assign(*(forward_start_state[set]));
+      }
+    }
+    num_forward_solves = 0;
+  }
+
+  // u holds the state of step k-1 (time t_from); on exit, the state of step k
+  auto recomputeStep = [&](vector<vector_RCP> & u, const ScalarT & t_from, const int & k) {
+    bool adj = is_adjoint;
+    is_adjoint = false;
+    current_time = t_from;
+    params->updateDynamicParams(k-1);
+    assembler->updateTimeStep(k-1);
+    int status = 0;
+    for (size_t set=0; set<u.size(); ++set) {
+      status += this->takeForwardStep(set, u, step_prev[set], k-1);
+    }
+    is_adjoint = adj;
+    TEUCHOS_TEST_FOR_EXCEPTION(status != 0, std::runtime_error,
+                               "Error: a forward step failed while the explicit adjoint recomputed it from a checkpoint.");
+    ++num_forward_solves;
+  };
+
+  auto forwardState = [&](const size_t & n, ScalarT & t_n) {
+    if (!use_checkpointing) {
+      extractState(0, E_n, n);
+      extractState(1, B_n, n);
+      t_n = soln_source[0]->getSpecificTime(store_index, n);
+      return;
+    }
+    while (true) {
+      const int prev_position = schedule->getRangeStart();
+      RevolveAction action = schedule->next();
+      if (action == RevolveAction::Advance) {
+        for (int k=prev_position+1; k<=schedule->getRangeStart(); ++k) {
+          recomputeStep(carried, carried_time, k);
+          carried_time += deltat;
+        }
+      }
+      else if (action == RevolveAction::Store) {
+        // next() has already claimed the slot, so the count points one past it
+        const int slot = schedule->getNumCheckpointsStored() - 1;
+        for (size_t set=0; set<carried.size(); ++set) {
+          ckpt[slot][set]->assign(*(carried[set]));
+        }
+        ckpt_time[slot] = carried_time;
+      }
+      else if (action == RevolveAction::Restore) {
+        const int slot = schedule->getNumCheckpointsStored() - 1;
+        for (size_t set=0; set<carried.size(); ++set) {
+          carried[set]->assign(*(ckpt[slot][set]));
+        }
+        carried_time = ckpt_time[slot];
+      }
+      else if (action == RevolveAction::FirstReverse || action == RevolveAction::Reverse) {
+        // A reversal at range_start hands over step k = range_start + 1, one step past the carried state
+        const int k = schedule->getRangeStart() + 1;
+        TEUCHOS_TEST_FOR_EXCEPTION(k != static_cast<int>(n), std::runtime_error,
+                                   "Error: the Revolve schedule reversed step " + std::to_string(k) +
+                                   ", but the explicit adjoint needs step " + std::to_string(n) + ".");
+        for (size_t set=0; set<carried.size(); ++set) {
+          stepped[set]->assign(*(carried[set]));
+        }
+        recomputeStep(stepped, carried_time, k);
+        E_n->assign(*(stepped[0]));
+        B_n->assign(*(stepped[1]));
+        t_n = carried_time + deltat;
+        return;
+      }
+      else {
+        TEUCHOS_TEST_FOR_EXCEPTION(true, std::runtime_error,
+                                   "Error: the Revolve schedule stopped (status " + std::to_string(schedule->getStatus()) +
+                                   ") before the explicit adjoint reached step " + std::to_string(n) + ".");
+      }
+    }
+  };
+
   // ---------------------------- backward sweep ----------------------------
 
   for (size_t timeiter=0; timeiter<numFwdSteps; ++timeiter) {
@@ -1572,11 +1746,11 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
       cout << "*******************************************************" << endl << endl << endl;
     }
 
-    extractState(0, E_n, n);
-    extractState(1, B_n, n);
+    ScalarT t_n = 0.0;
+    forwardState(n, t_n);
 
     // The linear residual parts do not depend on time; t_n is the time of the forward step n -> n+1
-    current_time = soln_source[0]->getSpecificTime(store_index, n);
+    current_time = t_n;
     postproc->setTimeIndex(n);
     assembler->updateStage(0, current_time, deltat);
 
@@ -1624,6 +1798,19 @@ void SolverManager<Node>::explicitSplitAdjoint(MrHyDE_OptVector & gradient) {
     std::swap(muE_over, muE_next_over);
 
     is_final_time = false;
+  }
+
+  if (use_checkpointing && Comm->getRank() == 0) {
+    // States held in full storage should be 0: that is the memory saving
+    size_t stored[2] = {0, 0};
+    for (size_t set=0; set<2; ++set) {
+      vector<vector<ScalarT> > all_times = soln_source[set]->extractAllTimes();
+      stored[set] = all_times.size() > 0 ? all_times[0].size() : 0;
+    }
+    cout << "[EXPLICIT-CHECKPOINT] " << (incremental ? "tangent" : "forward") << " states: steps " << numFwdSteps
+         << ", checkpoints " << num_checkpoints << ", steps recomputed " << num_forward_solves
+         << " (Revolve minimum " << numFwdSteps + Revolve::minExtraForwardSteps(numFwdSteps, num_checkpoints)
+         << "), states in storage " << stored[0] << " E, " << stored[1] << " B" << endl;
   }
 
   // Optional tangent test of the whole sweep: for random dp_k, propagate the linearized forward

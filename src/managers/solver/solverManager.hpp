@@ -351,6 +351,15 @@ public:
   void explicitHalfStepB(vector_RCP & E_over, vector_RCP & B_over);
 
   /**
+   * @brief Start state of a forward sweep: strong Dirichlet values and, with the second-order
+   *        E/B split, sol[1] replaced by a new vector holding B^0 after explicitHalfStepB.
+   *        transientSolver uses it for every forward sweep, and the checkpointed explicitSplitAdjoint
+   *        for the tangent sweep it recomputes. Needs current_time = start time.
+   * @param[in,out] sol Initial state [set] on input, the state the first step starts from on output
+   */
+  void setForwardStartState(vector<vector_RCP> & sol);
+
+  /**
    * @brief A coefficient (e.g. permittivity, permeability) as one numeric constant over all blocks
    *        (throws otherwise), as the explicit split adjoint and the E-only end terms of its objective need
    * @param[in] name Function name in the Functions list (default 1.0)
@@ -491,6 +500,8 @@ public:
   bool use_checkpointing;        // Use Revolve checkpointing for the transient adjoint
   int num_checkpoints;           // Checkpoint budget when use_checkpointing is true
   int num_forward_solves;        // Forward solves used by the last checkpointed gradient
+  bool forward_step_cut = false; // True if the last forward sweep cut its time step
+  vector<vector_RCP> forward_start_state; // [set] copy of the state the last forward sweep started from (checkpointed explicit adjoint)
   
   vector<bool> scalarDirichletData;   // True if scalar Dirichlet values exist
   vector<bool> staticDirichletData;   // True if static Dirichlet data provided

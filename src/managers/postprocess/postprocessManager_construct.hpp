@@ -178,8 +178,10 @@ void PostprocessManager<Node>::setup() {
     }
   }
   else if (analysis_type == "hessian") {
-    // The column loop drives tangent and second-order adjoint sweeps, which read the stored trajectory.
-    save_solution = true;
+    // The column loop drives tangent and second-order adjoint sweeps, which read the stored trajectory
+    // (or, with checkpointing, recompute it).
+    save_solution = (settings->sublist("Analysis").get<string>("forward state recovery type","file")
+                     != "checkpointing");
   }
   
   ///////////////////////////////////////////////////
